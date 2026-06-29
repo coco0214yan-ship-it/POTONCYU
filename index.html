@@ -3,119 +3,13 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>ぽとんちゅ | 穴あき一首ガチャ</title>
+    <title>ぽとんちゅ | 一首しか送れないチャット</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <main class="app" aria-live="polite">
-      <section class="scene is-active top-scene" id="topScene" aria-label="トップ画面">
-        <div class="top-layout">
-          <section class="hero-panel">
-            <p class="kicker">campus capsule tanka</p>
-            <h1>ぽとんちゅ</h1>
-            <p class="subcopy">友達と回す、一首ガチャ。</p>
-            <div class="lead-stack">
-              <p>空欄を選んだら、ちょっと話が始まる。</p>
-              <p>がやがやの中で、たまに深いやつ。</p>
-              <p>一首を完成させて、あとは友達と話すだけ。</p>
-            </div>
-            <button class="mega-button" type="button" id="startButton">
-              <span>まわしてみる</span>
-            </button>
-          </section>
-
-          <section class="gacha-visual" aria-label="ガチャ機のイメージ">
-            <div class="machine">
-              <div class="machine-top">
-                <span></span>
-                <span></span>
-                <span></span>
-                <span></span>
-                <span></span>
-              </div>
-              <div class="machine-window">
-                <i></i>
-                <i></i>
-                <i></i>
-                <i></i>
-              </div>
-              <div class="machine-body">
-                <div class="dial"></div>
-                <div class="slot">ぽとん</div>
-              </div>
-              <div class="machine-tray">
-                <div class="mini-capsule"></div>
-              </div>
-            </div>
-          </section>
-        </div>
-      </section>
-
-      <section class="scene category-scene" id="categoryScene" aria-label="台を選ぶ画面">
-        <div class="category-panel">
-          <div class="category-head">
-            <p class="kicker">choose a machine</p>
-            <h2>どの台にする？</h2>
-            <p>今のノリに近い台を選ぶ。深刻に選ばなくていい。</p>
-          </div>
-          <div class="category-scroll" id="categoryGrid"></div>
-        </div>
-      </section>
-
-      <section class="scene roll-scene" id="rollScene" aria-label="ガチャ演出画面">
-        <div class="roll-panel">
-          <p class="roll-label" id="rollingLabel">課題中</p>
-          <div class="roll-machine is-rolling" aria-hidden="true">
-            <div class="roll-dome">
-              <span></span>
-              <span></span>
-              <span></span>
-              <span></span>
-              <span></span>
-              <span></span>
-            </div>
-            <div class="roll-dial"></div>
-            <div class="drop-lane">
-              <div class="drop-capsule"></div>
-            </div>
-          </div>
-          <p class="rolling-copy">ころ、ぽと...</p>
-        </div>
-      </section>
-
-      <section class="scene hole-scene" id="holeScene" aria-label="穴あき一首画面">
-        <article class="result-shell">
-          <div class="capsule-open" aria-hidden="true">
-            <span class="cap-left"></span>
-            <span class="cap-right"></span>
-          </div>
-          <p class="mood-label" id="holeLabel">課題中</p>
-          <p class="poem" id="holePoem"></p>
-          <div class="choice-grid" id="choiceGrid" aria-label="空欄に入れる言葉"></div>
-        </article>
-      </section>
-
-      <section class="scene complete-scene" id="completeScene" aria-label="完成した一首と一問">
-        <article class="result-shell complete-shell">
-          <p class="mood-label" id="completeLabel">課題中</p>
-          <p class="poem complete-poem" id="completePoem"></p>
-          <section class="question-box">
-            <p class="question-kicker">ひとつだけ置いていく</p>
-            <p id="questionText">どの行が一番わかる？</p>
-          </section>
-          <div class="poem-actions">
-            <button class="mega-button compact" type="button" id="againButton">もう一回まわす</button>
-            <button class="plain-button" type="button" id="changeButton">台を変える</button>
-            <button class="plain-button" type="button" id="sleepButton">画面を寝かせる</button>
-          </div>
-          <p class="footnote">ここから先は、画面の外で。</p>
-        </article>
-        <div class="sleep-overlay" aria-hidden="true">
-          <p>画面、寝かせてもいい。</p>
-        </div>
-      </section>
-    </main>
-
-    <script src="app.js"></script>
+    <div class="sugar-pattern" aria-hidden="true"></div>
+    <main id="app" class="app-shell"></main>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="script.js"></script>
   </body>
 </html>
