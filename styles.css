@@ -1,7 +1,9 @@
+@import url("https://fonts.googleapis.com/css2?family=Kiwi+Maru&family=M+PLUS+Rounded+1c:wght@400;500;700;800;900&family=Zen+Maru+Gothic:wght@400;500;700;900&display=swap");
+
 :root {
   color-scheme: light;
-  --ink: #3f2f2a;
-  --muted: #806d62;
+  --ink: #5a4033;
+  --muted: #8a7063;
   --cream: #fff8ea;
   --milk: #fffdf7;
   --surface: #fffaf1;
@@ -34,7 +36,9 @@ body {
   background:
     linear-gradient(180deg, #fff7e5 0%, #fffdf7 44%, #f5fff3 100%),
     repeating-linear-gradient(90deg, rgba(111, 78, 55, 0.04) 0 1px, transparent 1px 34px);
-  font-family: "Yu Gothic", "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
+  font-family: "Zen Maru Gothic", "M PLUS Rounded 1c", "Yu Gothic", "Hiragino Maru Gothic ProN", Meiryo, sans-serif;
+  font-weight: 650;
+  letter-spacing: 0;
 }
 
 button,
@@ -49,6 +53,8 @@ button {
   background: var(--milk);
   color: var(--ink);
   font-weight: 900;
+  letter-spacing: 0;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.42);
   cursor: pointer;
   transition:
     transform 160ms ease,
@@ -76,6 +82,8 @@ input {
   background: #fffefa;
   color: var(--ink);
   padding: 10px 12px;
+  font-weight: 800;
+  letter-spacing: 0;
 }
 
 input:focus {
@@ -157,6 +165,11 @@ h1,
   color: var(--cocoa-dark);
   font-size: clamp(40px, 7vw, 66px);
   line-height: 1;
+  font-weight: 900;
+  letter-spacing: 0;
+  text-shadow:
+    0 2px 0 rgba(255, 255, 255, 0.88),
+    0 7px 18px rgba(111, 78, 55, 0.13);
 }
 
 .brand-subcopy {
@@ -164,6 +177,7 @@ h1,
   color: var(--muted);
   font-size: 17px;
   font-weight: 900;
+  letter-spacing: 0;
 }
 
 .login-screen,
@@ -186,7 +200,8 @@ h1,
 .login-copy {
   margin: 22px 0;
   color: var(--muted);
-  line-height: 1.85;
+  line-height: 2;
+  letter-spacing: 0;
 }
 
 .google-button,
@@ -416,6 +431,16 @@ h1,
   font-weight: 900;
 }
 
+.message-meta {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+}
+
+.message-meta.is-mine {
+  justify-content: flex-end;
+}
+
 .room-kind {
   display: inline-grid;
   place-items: center;
@@ -458,12 +483,14 @@ h1,
 
 .poem-lines {
   display: grid;
-  gap: 7px;
+  gap: 9px;
   margin: 0;
   color: var(--cocoa-dark);
-  font-family: "Yu Mincho", "Hiragino Mincho ProN", serif;
+  font-family: "Kiwi Maru", "Zen Maru Gothic", "Yu Mincho", "Hiragino Mincho ProN", serif;
   font-size: 19px;
-  line-height: 1.65;
+  font-weight: 650;
+  line-height: 1.85;
+  letter-spacing: 0;
 }
 
 .favorite-box .poem-lines,
@@ -566,10 +593,19 @@ h1,
   background: #fffefa;
   box-shadow: var(--soft-shadow);
   padding: 14px;
+  animation: bubbleArrive 260ms ease both;
 }
 
 .message-row.is-mine .poem-bubble {
   background: #fff0d4;
+}
+
+.message-row:not(.is-mine) .poem-bubble {
+  border-top-left-radius: 3px;
+}
+
+.message-row.is-mine .poem-bubble {
+  border-top-right-radius: 3px;
 }
 
 .message-topic {
@@ -608,6 +644,24 @@ h1,
   flex-wrap: wrap;
 }
 
+.reaction-row {
+  min-height: 0;
+  margin-top: 10px;
+}
+
+.reaction-picker {
+  max-width: min(460px, 100%);
+  border: 1px solid rgba(234, 220, 200, 0.86);
+  border-radius: 8px;
+  background: rgba(255, 253, 247, 0.94);
+  box-shadow: var(--soft-shadow);
+  padding: 8px;
+}
+
+.message-row.is-mine .reaction-picker {
+  justify-self: end;
+}
+
 .reaction-pill {
   min-height: 30px;
   border-radius: 999px;
@@ -615,12 +669,59 @@ h1,
   color: var(--muted);
   padding: 4px 9px;
   font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0;
 }
 
 .reaction-pill.is-active {
   border-color: rgba(233, 119, 54, 0.38);
   background: var(--butter);
   color: var(--cocoa-dark);
+}
+
+.reaction-pill.is-emoji {
+  min-width: 38px;
+  font-size: 16px;
+  padding: 3px 8px;
+}
+
+.reaction-toggle {
+  background: var(--mint);
+  color: var(--mint-deep);
+}
+
+.reflection-card {
+  display: grid;
+  gap: 12px;
+  width: min(620px, 100%);
+  justify-self: center;
+  border: 1px solid rgba(255, 178, 107, 0.32);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 246, 217, 0.95), rgba(255, 253, 247, 0.98)),
+    var(--milk);
+  box-shadow: var(--soft-shadow);
+  padding: 15px;
+}
+
+.reflection-card h2 {
+  margin: 0;
+  color: var(--cocoa-dark);
+  font-size: 20px;
+  line-height: 1.55;
+  letter-spacing: 0;
+}
+
+.reflection-card p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.8;
+}
+
+.reflection-poem {
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.7);
+  padding: 12px;
 }
 
 .composer-dock {
@@ -659,6 +760,8 @@ h1,
   margin: 0 0 8px;
   color: var(--cocoa-dark);
   font-size: 30px;
+  letter-spacing: 0;
+  text-shadow: 0 2px 0 rgba(255, 255, 255, 0.72);
 }
 
 .counter-row {
@@ -712,6 +815,9 @@ h1,
   background: #fff6d9;
   color: var(--cocoa-dark);
   font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0;
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.46);
 }
 
 .gacha-panel {
@@ -1003,9 +1109,10 @@ h1,
   background: var(--strawberry);
   color: var(--cocoa-dark);
   padding: 2px 14px;
-  font-family: "Yu Gothic", "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
+  font-family: "Zen Maru Gothic", "M PLUS Rounded 1c", "Yu Gothic", "Hiragino Maru Gothic ProN", Meiryo, sans-serif;
   font-size: 17px;
   font-weight: 900;
+  letter-spacing: 0;
   box-shadow:
     inset 0 2px 0 rgba(255, 255, 255, 0.48),
     0 9px 18px rgba(111, 78, 55, 0.14);
@@ -1136,6 +1243,11 @@ h1,
   animation: confirmRise 420ms ease both;
 }
 
+.confirm-panel h1 {
+  letter-spacing: 0;
+  text-shadow: 0 2px 0 rgba(255, 255, 255, 0.76);
+}
+
 .confirm-copy {
   margin: 0;
   color: var(--muted);
@@ -1154,6 +1266,17 @@ h1,
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes bubbleArrive {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }
 

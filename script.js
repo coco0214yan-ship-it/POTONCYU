@@ -1,7 +1,9 @@
 const app = document.querySelector("#app");
 const toast = document.querySelector("#toast");
 
-const STORAGE_KEY = "potonchu.prototype.v1";
+const LEGACY_STORAGE_KEY = "potonchu.prototype.v1";
+const SHARED_STORAGE_KEY = "potonchu.shared.v2";
+const SESSION_USER_KEY = "potonchu.sessionUser.v1";
 const BLANK = "__POTON_BLANK__";
 
 const topicGroups = [
@@ -14,7 +16,14 @@ const topicGroups = [
 ];
 const iconChoices = ["ぽ", "あ", "み", "こ", "ゆ", "と"];
 const reactionLabels = ["わかる", "それな", "今の誰", "また話そ", "笑った", "刺さった"];
+const emojiReactions = ["😂", "🥺", "👍", "💭", "🍵", "🌙", "🫶", "👀"];
+const reactionOptions = [
+  ...reactionLabels.map((label) => ({ id: label, label, type: "text" })),
+  ...emojiReactions.map((label) => ({ id: label, label, type: "emoji" })),
+];
 const gachaCaptions = ["ことばをころころ中", "一首を探しています", "お題に合うことばを回しています", "ぽとんと届く一首を選んでいます"];
+const reflectionCopies = ["昨日の一首、まだ残ってる？", "昨日のこれ、ちょっと話す？", "あの一首の続き、送ってみる？", "昨日のぽとん、今日どうなった？", "一晩たって、まだ刺さってる？"];
+const reflectionQuestions = ["この一首、今もわかる？", "昨日より気持ち変わった？", "この一首、誰に近かった？", "続きがあるなら何を送る？", "今日の返事を一首にする？"];
 
 const poemLibrary = [
   {
@@ -151,52 +160,79 @@ const poemLibrary = [
   },
 ];
 
-const storageAdapter = {
+const roomChannel = "BroadcastChannel" in window ? new BroadcastChannel("potonchu-room-sync") : null;
+
+const roomStore = {
   load() {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return createEmptyState();
-      return normalizeState(JSON.parse(raw));
+      const raw = localStorage.getItem(SHARED_STORAGE_KEY);
+      if (raw) return normalizeSharedState(JSON.parse(raw));
+      return migrateLegacyState();
     } catch (error) {
-      return createEmptyState();
+      return createSharedState();
     }
   },
-  save(data) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  save(data, shouldBroadcast = true) {
+    const next = normalizeSharedState({ ...data, updatedAt: Date.now() });
+    localStorage.setItem(SHARED_STORAGE_KEY, JSON.stringify(next));
+    if (shouldBroadcast) roomChannel?.postMessage({ type: "shared-state-updated", updatedAt: next.updatedAt });
+    return next;
+  },
+  update(updater) {
+    const current = this.load();
+    const result = updater(current) || current;
+    return this.save(result);
   },
 };
 
-let appState = storageAdapter.load();
+let sharedState = roomStore.load();
+let appState = createAppState();
 let ui = {
   view: appState.user ? "home" : "login",
   topic: "",
   composer: null,
   createResultId: null,
+  openReactionFor: "",
   pendingInviteRoomId: new URLSearchParams(window.location.search).get("roomId"),
+  pendingInviteName: new URLSearchParams(window.location.search).get("roomName"),
+  pendingInviteType: new URLSearchParams(window.location.search).get("roomType"),
 };
 
 if (appState.user && ui.pendingInviteRoomId) {
   const joinedRoom = ensureJoinedRoom(ui.pendingInviteRoomId);
-  appState.activeRoomId = joinedRoom.id;
+  setActiveRoom(joinedRoom.id);
   ui.view = "chat";
-  persist();
+  persistShared();
 }
 
-function createEmptyState() {
+function createSharedState() {
   return {
-    user: null,
+    users: [],
     rooms: [],
-    favorite: null,
-    activeRoomId: null,
+    favorites: {},
+    updatedAt: Date.now(),
   };
 }
 
-function normalizeState(data) {
-  const empty = createEmptyState();
+function createAppState() {
+  const user = loadSessionUser();
+  return {
+    user,
+    rooms: sharedState.rooms,
+    favorite: user ? sharedState.favorites?.[user.id] || null : null,
+    activeRoomId: sessionStorage.getItem("potonchu.activeRoomId") || null,
+  };
+}
+
+function normalizeSharedState(data) {
+  const empty = createSharedState();
   return {
     ...empty,
     ...data,
+    users: Array.isArray(data?.users) ? data.users.map(normalizeUser) : [],
     rooms: Array.isArray(data?.rooms) ? data.rooms.map(normalizeRoom) : [],
+    favorites: data?.favorites && typeof data.favorites === "object" ? data.favorites : {},
+    updatedAt: Number(data?.updatedAt) || Date.now(),
   };
 }
 
@@ -205,13 +241,93 @@ function normalizeRoom(room) {
     id: room.id || makeId("room"),
     name: room.name || "名前のないルーム",
     type: room.type === "group" ? "group" : "pair",
-    members: Array.isArray(room.members) ? room.members : [],
-    messages: Array.isArray(room.messages) ? room.messages : [],
+    createdBy: room.createdBy || room.members?.[0]?.id || "",
+    inviteCode: room.inviteCode || room.id || makeId("invite"),
+    members: Array.isArray(room.members) ? room.members.map(normalizeUser) : [],
+    messages: Array.isArray(room.messages) ? room.messages.map(normalizeMessage) : [],
     createdAt: room.createdAt || Date.now(),
   };
 }
 
+function normalizeMessage(message) {
+  const author = normalizeUser(message.author || {
+    id: message.senderId,
+    name: message.senderName,
+    icon: message.senderPhoto || message.senderIcon,
+  });
+  return {
+    id: message.id || message.messageId || makeId("msg"),
+    roomId: message.roomId || "",
+    topic: message.topic || "お題",
+    lines: Array.isArray(message.lines) ? message.lines : Array.isArray(message.poemLines) ? message.poemLines : [],
+    selectedWord: message.selectedWord || "",
+    author,
+    senderId: message.senderId || author.id,
+    senderName: message.senderName || author.name,
+    senderPhoto: message.senderPhoto || author.icon,
+    reactions: normalizeReactions(message.reactions),
+    createdAt: message.createdAt || Date.now(),
+  };
+}
+
+function normalizeUser(user) {
+  return {
+    id: user?.id || user?.uid || makeId("user"),
+    name: user?.name || user?.displayName || "ぽとん",
+    icon: user?.icon || user?.photoURL || "ぽ",
+    provider: user?.provider || "google-mock",
+    createdAt: user?.createdAt || Date.now(),
+  };
+}
+
+function normalizeReactions(reactions) {
+  if (!reactions || typeof reactions !== "object") return {};
+  return Object.fromEntries(
+    Object.entries(reactions).map(([key, users]) => [key, Array.isArray(users) ? [...new Set(users)] : []]),
+  );
+}
+
+function migrateLegacyState() {
+  try {
+    const raw = localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (!raw) return createSharedState();
+    const legacy = JSON.parse(raw);
+    const user = legacy.user ? normalizeUser(legacy.user) : null;
+    const migrated = normalizeSharedState({
+      users: user ? [user] : [],
+      rooms: Array.isArray(legacy.rooms) ? legacy.rooms : [],
+      favorites: user && legacy.favorite ? { [user.id]: legacy.favorite } : {},
+      updatedAt: Date.now(),
+    });
+    roomStore.save(migrated, false);
+    if (user && !loadSessionUser()) saveSessionUser(user);
+    if (legacy.activeRoomId) sessionStorage.setItem("potonchu.activeRoomId", legacy.activeRoomId);
+    return migrated;
+  } catch (error) {
+    return createSharedState();
+  }
+}
+
+function loadSessionUser() {
+  try {
+    const raw = sessionStorage.getItem(SESSION_USER_KEY);
+    return raw ? normalizeUser(JSON.parse(raw)) : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function saveSessionUser(user) {
+  sessionStorage.setItem(SESSION_USER_KEY, JSON.stringify(normalizeUser(user)));
+}
+
+function clearSessionUser() {
+  sessionStorage.removeItem(SESSION_USER_KEY);
+}
+
 function render() {
+  refreshAppState();
+
   if (!appState.user && !["login", "setup"].includes(ui.view)) {
     ui.view = "login";
   }
@@ -230,6 +346,30 @@ function render() {
     updateTopicCounter();
   }
 }
+
+function refreshAppState() {
+  sharedState = roomStore.load();
+  const user = loadSessionUser();
+  appState = {
+    user,
+    rooms: sharedState.rooms,
+    favorite: user ? sharedState.favorites?.[user.id] || null : null,
+    activeRoomId: sessionStorage.getItem("potonchu.activeRoomId") || appState?.activeRoomId || null,
+  };
+}
+
+function handleSharedUpdate() {
+  refreshAppState();
+  if (["home", "chat"].includes(ui.view)) render();
+}
+
+window.addEventListener("storage", (event) => {
+  if (event.key === SHARED_STORAGE_KEY) handleSharedUpdate();
+});
+
+roomChannel?.addEventListener("message", (event) => {
+  if (event.data?.type === "shared-state-updated") handleSharedUpdate();
+});
 
 function renderLogin() {
   const inviteNote = ui.pendingInviteRoomId ? "<p class=\"small-note\">招待リンクを開いています。ログイン後にそのルームへ入ります。</p>" : "";
@@ -362,9 +502,9 @@ function renderRoomList() {
             <button type="button" class="room-item" data-action="open-room" data-room-id="${escapeAttribute(room.id)}">
               <span>
                 <strong>${escapeHtml(room.name)}</strong>
-                <span class="room-meta">${room.type === "group" ? "グループ" : "1対1"} ・ ${room.messages.length}首 ・ ${formatDate(room.createdAt)}</span>
+                <span class="room-meta">${room.type === "group" ? "グループ" : "1対1"} ・ ${room.members.length}人 ・ ${room.messages.length}首 ・ ${formatDate(room.createdAt)}</span>
               </span>
-              <span class="room-kind">${room.type === "group" ? "グループ" : "1対1"}</span>
+              <span class="room-kind">${getYesterdayReflection(room) ? "昨日のぽとん" : room.type === "group" ? "グループ" : "1対1"}</span>
             </button>
           `,
         )
@@ -464,6 +604,7 @@ function renderChat() {
       </header>
 
       <section class="message-list" aria-label="一首チャット">
+        ${renderReflectionCard(room)}
         ${renderMessages(room)}
       </section>
 
@@ -497,35 +638,64 @@ function renderMessage(message, room) {
   const isMine = message.author.id === appState.user.id;
   return `
     <article class="message-row ${isMine ? "is-mine" : ""}">
-      <div class="message-meta">${escapeHtml(message.author.name)} ・ ${formatDate(message.createdAt)}</div>
+      <div class="message-meta ${isMine ? "is-mine" : ""}">
+        ${isMine ? "" : `<span class="avatar small">${escapeHtml(message.author.icon)}</span>`}
+        <span>${escapeHtml(message.author.name)} ・ ${formatDate(message.createdAt)}</span>
+      </div>
       <div class="poem-bubble">
         <span class="message-topic">${escapeHtml(message.topic)}</span>
         ${renderPoemLines(message.lines)}
+        <div class="reaction-row">${renderReactionSummary(message)}</div>
         <div class="message-footer">
           <button type="button" class="mini-button" data-action="favorite-message" data-message-id="${escapeAttribute(message.id)}">よりしろにする</button>
-          <div class="reaction-row">${renderReactionSummary(message)}</div>
+          <button type="button" class="mini-button reaction-toggle" data-action="toggle-reaction-picker" data-message-id="${escapeAttribute(message.id)}">リアクションする</button>
         </div>
       </div>
-      <div class="reaction-picker" aria-label="リアクション">
-        ${reactionLabels
-          .map((label) => {
-            const users = message.reactions?.[label] || [];
-            const active = users.includes(appState.user.id);
-            const count = users.length ? ` ${users.length}` : "";
-            return `<button type="button" class="reaction-pill ${active ? "is-active" : ""}" data-action="toggle-reaction" data-room-id="${escapeAttribute(room.id)}" data-message-id="${escapeAttribute(message.id)}" data-reaction="${escapeAttribute(label)}">${escapeHtml(label)}${count}</button>`;
-          })
-          .join("")}
-      </div>
+      ${ui.openReactionFor === message.id ? renderReactionPicker(message, room) : ""}
     </article>
   `;
 }
 
 function renderReactionSummary(message) {
   const activeReactions = Object.entries(message.reactions || {}).filter(([, users]) => users.length > 0);
-  if (activeReactions.length === 0) return "<span class=\"message-meta\">リアクション待ち</span>";
+  if (activeReactions.length === 0) return "";
   return activeReactions
     .map(([label, users]) => `<span class="reaction-pill is-active">${escapeHtml(label)} ${users.length}</span>`)
     .join("");
+}
+
+function renderReactionPicker(message, room) {
+  return `
+    <div class="reaction-picker" aria-label="リアクション">
+      ${reactionOptions
+        .map((option) => {
+          const users = message.reactions?.[option.id] || [];
+          const active = users.includes(appState.user.id);
+          const count = users.length ? ` ${users.length}` : "";
+          return `<button type="button" class="reaction-pill ${option.type === "emoji" ? "is-emoji" : ""} ${active ? "is-active" : ""}" data-action="toggle-reaction" data-room-id="${escapeAttribute(room.id)}" data-message-id="${escapeAttribute(message.id)}" data-reaction="${escapeAttribute(option.id)}">${escapeHtml(option.label)}${count}</button>`;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
+function renderReflectionCard(room) {
+  const reflection = getYesterdayReflection(room);
+  if (!reflection) return "";
+  return `
+    <section class="reflection-card" aria-label="昨日の一首">
+      <div>
+        <p class="eyebrow">昨日のぽとん</p>
+        <h2>${escapeHtml(reflection.copy)}</h2>
+      </div>
+      <div class="reflection-poem">
+        <span class="message-topic">${escapeHtml(reflection.message.topic)}</span>
+        ${renderPoemLines(reflection.message.lines)}
+      </div>
+      <p>${escapeHtml(reflection.question)}</p>
+      <button type="button" class="primary-button" data-action="reply-yesterday">今日の一首で返す</button>
+    </section>
+  `;
 }
 
 function renderTopic() {
@@ -737,10 +907,9 @@ function handleClick(event) {
   }
 
   if (action === "logout") {
-    appState.user = null;
-    appState.activeRoomId = null;
+    clearSessionUser();
+    sessionStorage.removeItem("potonchu.activeRoomId");
     ui.view = "login";
-    persist();
     render();
     showToast("ログアウトしました。");
     return;
@@ -749,7 +918,6 @@ function handleClick(event) {
   if (action === "go-home") {
     ui.view = "home";
     ui.createResultId = null;
-    persist();
     render();
     return;
   }
@@ -762,9 +930,8 @@ function handleClick(event) {
   }
 
   if (action === "open-room") {
-    appState.activeRoomId = button.dataset.roomId;
+    setActiveRoom(button.dataset.roomId);
     ui.view = "chat";
-    persist();
     render();
     return;
   }
@@ -822,8 +989,22 @@ function handleClick(event) {
     return;
   }
 
+  if (action === "toggle-reaction-picker") {
+    ui.openReactionFor = ui.openReactionFor === button.dataset.messageId ? "" : button.dataset.messageId;
+    render();
+    return;
+  }
+
   if (action === "favorite-message") {
     saveFavorite(button.dataset.messageId);
+    return;
+  }
+
+  if (action === "reply-yesterday") {
+    ui.topic = "昨日の続き";
+    ui.composer = null;
+    ui.view = "topic";
+    render();
     return;
   }
 
@@ -845,13 +1026,15 @@ function handleSubmit(event) {
       return;
     }
 
-    appState.user = {
+    const user = {
       id: makeId("user"),
       name,
       icon,
       provider: "google-mock",
       createdAt: Date.now(),
     };
+    saveSessionUser(user);
+    upsertUser(user);
     routeAfterAuth();
     return;
   }
@@ -865,10 +1048,13 @@ function handleSubmit(event) {
     }
 
     const room = createRoom(name, type);
-    appState.rooms = [room, ...appState.rooms];
-    appState.activeRoomId = room.id;
+    sharedState = roomStore.update((data) => {
+      data.rooms = [room, ...data.rooms];
+      return data;
+    });
+    refreshAppState();
+    setActiveRoom(room.id);
     ui.createResultId = room.id;
-    persist();
     render();
     showToast("招待リンクを作りました。");
     return;
@@ -899,16 +1085,14 @@ function handleInput(event) {
 function routeAfterAuth() {
   if (ui.pendingInviteRoomId) {
     const room = ensureJoinedRoom(ui.pendingInviteRoomId);
-    appState.activeRoomId = room.id;
+    setActiveRoom(room.id);
     ui.view = "chat";
-    persist();
     render();
     showToast("招待リンクから参加しました。");
     return;
   }
 
   ui.view = "home";
-  persist();
   render();
 }
 
@@ -918,6 +1102,8 @@ function createRoom(name, type) {
     id,
     name,
     type,
+    createdBy: appState.user.id,
+    inviteCode: id,
     members: createMembersForRoom(type),
     messages: [],
     createdAt: Date.now(),
@@ -930,10 +1116,7 @@ function createMembersForRoom(type) {
     name: appState.user.name,
     icon: appState.user.icon,
   };
-  if (type === "group") {
-    return [current, { id: "mock-a", name: "友だちA", icon: "あ" }, { id: "mock-b", name: "友だちB", icon: "み" }];
-  }
-  return [current, { id: "mock-friend", name: "友だち", icon: "と" }];
+  return [current];
 }
 
 function ensureJoinedRoom(roomId) {
@@ -941,32 +1124,52 @@ function ensureJoinedRoom(roomId) {
   if (!room) {
     room = {
       id: roomId,
-      name: `招待ルーム ${roomId.slice(-4).toUpperCase()}`,
-      type: "group",
+      name: ui.pendingInviteName || `招待ルーム ${roomId.slice(-4).toUpperCase()}`,
+      type: ui.pendingInviteType === "pair" ? "pair" : "group",
+      createdBy: "",
+      inviteCode: roomId,
       members: [],
       messages: [],
       createdAt: Date.now(),
     };
-    appState.rooms = [room, ...appState.rooms];
+    sharedState = roomStore.update((data) => {
+      data.rooms = [room, ...data.rooms];
+      return data;
+    });
+    refreshAppState();
+    room = findRoom(roomId);
   }
 
   const hasUser = room.members.some((member) => member.id === appState.user.id);
   if (!hasUser) {
-    room.members = [
-      {
-        id: appState.user.id,
-        name: appState.user.name,
-        icon: appState.user.icon,
-      },
-      ...room.members,
-    ];
-  }
-
-  if (room.members.length === 1) {
-    room.members.push({ id: "mock-friend", name: "招待した人", icon: "ま" });
+    const user = normalizeUser(appState.user);
+    sharedState = roomStore.update((data) => {
+      const target = data.rooms.find((item) => item.id === roomId);
+      if (target && !target.members.some((member) => member.id === user.id)) target.members.push(user);
+      return data;
+    });
+    refreshAppState();
+    room = findRoom(roomId);
   }
 
   return room;
+}
+
+function upsertUser(user) {
+  const normalized = normalizeUser(user);
+  sharedState = roomStore.update((data) => {
+    const index = data.users.findIndex((item) => item.id === normalized.id);
+    if (index >= 0) data.users[index] = normalized;
+    else data.users.push(normalized);
+    return data;
+  });
+  refreshAppState();
+}
+
+function setActiveRoom(roomId) {
+  appState.activeRoomId = roomId;
+  sessionStorage.setItem("potonchu.activeRoomId", roomId);
+  if (appState.user) ensureJoinedRoom(roomId);
 }
 
 function spinGacha(topic, previousTemplateId = "") {
@@ -1012,47 +1215,53 @@ function sendPoem() {
   const composer = ui.composer;
   if (!room || !composer?.draft || !composer.selectedChoice) return;
 
+  const lines = completePoemLines(composer.draft, composer.selectedChoice);
   const message = {
     id: makeId("msg"),
     roomId: room.id,
     topic: composer.topic,
-    lines: completePoemLines(composer.draft, composer.selectedChoice),
+    lines,
+    poemLines: lines,
+    selectedWord: composer.selectedChoice,
     author: {
       id: appState.user.id,
       name: appState.user.name,
       icon: appState.user.icon,
     },
+    senderId: appState.user.id,
+    senderName: appState.user.name,
+    senderPhoto: appState.user.icon,
     reactions: {},
     createdAt: Date.now(),
   };
 
-  room.messages.push(message);
-  appState.activeRoomId = room.id;
+  sharedState = roomStore.update((data) => {
+    const target = data.rooms.find((item) => item.id === room.id);
+    if (target) target.messages.push(message);
+    return data;
+  });
+  setActiveRoom(room.id);
   ui.composer = null;
   ui.topic = "";
+  ui.openReactionFor = "";
   ui.view = "chat";
-  persist();
   render();
   showToast("一首だけ送りました。");
 }
 
 function toggleReaction(roomId, messageId, label) {
-  const room = findRoom(roomId);
-  const message = room?.messages.find((item) => item.id === messageId);
-  if (!message) return;
-
-  if (!message.reactions) message.reactions = {};
-  if (!message.reactions[label]) message.reactions[label] = [];
-
-  const users = message.reactions[label];
-  const index = users.indexOf(appState.user.id);
-  if (index >= 0) {
-    users.splice(index, 1);
-  } else {
-    users.push(appState.user.id);
-  }
-
-  persist();
+  sharedState = roomStore.update((data) => {
+    const room = data.rooms.find((item) => item.id === roomId);
+    const message = room?.messages.find((item) => item.id === messageId);
+    if (!message) return data;
+    if (!message.reactions) message.reactions = {};
+    if (!message.reactions[label]) message.reactions[label] = [];
+    const users = message.reactions[label];
+    const index = users.indexOf(appState.user.id);
+    if (index >= 0) users.splice(index, 1);
+    else users.push(appState.user.id);
+    return data;
+  });
   render();
 }
 
@@ -1070,7 +1279,10 @@ function saveFavorite(messageId) {
     authorName: message.author.name,
     savedAt: Date.now(),
   };
-  persist();
+  sharedState = roomStore.update((data) => {
+    data.favorites[appState.user.id] = appState.favorite;
+    return data;
+  });
   render();
   showToast("お気に入りの一句を置き換えました。");
 }
@@ -1111,6 +1323,29 @@ function completePoemLines(draft, selectedChoice) {
   return draft.lines.map((line) => (line === BLANK ? selectedChoice : line));
 }
 
+function getYesterdayReflection(room) {
+  const yesterdayMessages = room.messages
+    .filter((message) => isYesterday(message.createdAt))
+    .sort((a, b) => b.createdAt - a.createdAt);
+  if (yesterdayMessages.length === 0) return null;
+  const message = yesterdayMessages[0];
+  const seed = Math.abs(Array.from(message.id).reduce((total, char) => total + char.charCodeAt(0), 0));
+  return {
+    message,
+    copy: reflectionCopies[seed % reflectionCopies.length],
+    question: reflectionQuestions[seed % reflectionQuestions.length],
+  };
+}
+
+function isYesterday(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return false;
+  const today = new Date();
+  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+  const startOfYesterday = startOfToday - 24 * 60 * 60 * 1000;
+  return date.getTime() >= startOfYesterday && date.getTime() < startOfToday;
+}
+
 function updateTopicCounter() {
   const input = document.querySelector("#topicInput");
   const countTarget = document.querySelector("#topicCount");
@@ -1134,7 +1369,10 @@ async function copyInvite(roomId) {
 
 function makeInviteLink(roomId) {
   const url = new URL(window.location.href);
-  url.search = `?roomId=${encodeURIComponent(roomId)}`;
+  const room = findRoom(roomId);
+  url.searchParams.set("roomId", roomId);
+  if (room?.name) url.searchParams.set("roomName", room.name);
+  if (room?.type) url.searchParams.set("roomType", room.type);
   url.hash = "";
   return url.toString();
 }
@@ -1168,8 +1406,9 @@ function findRoom(roomId) {
   return appState.rooms.find((room) => room.id === roomId);
 }
 
-function persist() {
-  storageAdapter.save(appState);
+function persistShared() {
+  sharedState = roomStore.save(sharedState);
+  refreshAppState();
 }
 
 function showToast(text) {
