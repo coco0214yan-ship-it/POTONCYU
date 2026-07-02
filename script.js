@@ -4,6 +4,9 @@ const toast = document.querySelector("#toast");
 const LEGACY_STORAGE_KEY = "potonchu.prototype.v1";
 const SHARED_STORAGE_KEY = "potonchu.shared.v2";
 const SESSION_USER_KEY = "potonchu.sessionUser.v1";
+const ACTIVE_ROOM_KEY = "potonchu.activeRoomId";
+const HISTORY_RESET_KEY = "potonchu.historyReset.v4";
+const FIREBASE_SDK_VERSION = "12.15.0";
 const BLANK = "__POTON_BLANK__";
 
 const topicGroups = [
@@ -160,22 +163,29 @@ const poemLibrary = [
   },
 ];
 
-const roomChannel = "BroadcastChannel" in window ? new BroadcastChannel("potonchu-room-sync") : null;
+clearLegacyHistory();
+
+const roomChannel = "BroadcastChannel" in window ? new BroadcastChannel("potonchu-room-sync-v3") : null;
+const backend = {
+  mode: "demo",
+  ready: false,
+  status: "Firebase未設定です。同じPCの別タブだけで試せます。",
+  firebase: null,
+  roomUnsubscribe: null,
+  messageUnsubscribes: new Map(),
+  seenMemberIds: new Map(),
+};
+if (hasFirebaseConfig()) backend.status = "Firebaseへ接続中です。";
+let demoState = createSharedState();
 
 const roomStore = {
   load() {
-    try {
-      const raw = localStorage.getItem(SHARED_STORAGE_KEY);
-      if (raw) return normalizeSharedState(JSON.parse(raw));
-      return migrateLegacyState();
-    } catch (error) {
-      return createSharedState();
-    }
+    return demoState;
   },
   save(data, shouldBroadcast = true) {
     const next = normalizeSharedState({ ...data, updatedAt: Date.now() });
-    localStorage.setItem(SHARED_STORAGE_KEY, JSON.stringify(next));
-    if (shouldBroadcast) roomChannel?.postMessage({ type: "shared-state-updated", updatedAt: next.updatedAt });
+    demoState = next;
+    if (shouldBroadcast) roomChannel?.postMessage({ type: "demo-state-updated", state: next });
     return next;
   },
   update(updater) {
@@ -193,17 +203,14 @@ let ui = {
   composer: null,
   createResultId: null,
   openReactionFor: "",
+  pendingPhoto: "",
+  firebaseNoticeDismissed: false,
   pendingInviteRoomId: new URLSearchParams(window.location.search).get("roomId"),
   pendingInviteName: new URLSearchParams(window.location.search).get("roomName"),
   pendingInviteType: new URLSearchParams(window.location.search).get("roomType"),
 };
 
-if (appState.user && ui.pendingInviteRoomId) {
-  const joinedRoom = ensureJoinedRoom(ui.pendingInviteRoomId);
-  setActiveRoom(joinedRoom.id);
-  ui.view = "chat";
-  persistShared();
-}
+roomChannel?.postMessage({ type: "request-demo-state" });
 
 function createSharedState() {
   return {
@@ -220,7 +227,7 @@ function createAppState() {
     user,
     rooms: sharedState.rooms,
     favorite: user ? sharedState.favorites?.[user.id] || null : null,
-    activeRoomId: sessionStorage.getItem("potonchu.activeRoomId") || null,
+    activeRoomId: sessionStorage.getItem(ACTIVE_ROOM_KEY) || null,
   };
 }
 
@@ -254,6 +261,7 @@ function normalizeMessage(message) {
     id: message.senderId,
     name: message.senderName,
     icon: message.senderPhoto || message.senderIcon,
+    photoURL: message.senderPhoto,
   });
   return {
     id: message.id || message.messageId || makeId("msg"),
@@ -266,15 +274,19 @@ function normalizeMessage(message) {
     senderName: message.senderName || author.name,
     senderPhoto: message.senderPhoto || author.icon,
     reactions: normalizeReactions(message.reactions),
-    createdAt: message.createdAt || Date.now(),
+    createdAt: toMillis(message.createdAt) || message.createdAtMillis || Date.now(),
   };
 }
 
 function normalizeUser(user) {
+  const photoURL = user?.photoURL || (isImageValue(user?.icon) ? user.icon : "");
+  const customIconURL = user?.customIconURL || "";
   return {
     id: user?.id || user?.uid || makeId("user"),
     name: user?.name || user?.displayName || "ぽとん",
-    icon: user?.icon || user?.photoURL || "ぽ",
+    icon: user?.icon && !isImageValue(user.icon) ? user.icon : "ぽ",
+    photoURL,
+    customIconURL,
     provider: user?.provider || "google-mock",
     createdAt: user?.createdAt || Date.now(),
   };
@@ -287,24 +299,15 @@ function normalizeReactions(reactions) {
   );
 }
 
-function migrateLegacyState() {
+function clearLegacyHistory() {
   try {
-    const raw = localStorage.getItem(LEGACY_STORAGE_KEY);
-    if (!raw) return createSharedState();
-    const legacy = JSON.parse(raw);
-    const user = legacy.user ? normalizeUser(legacy.user) : null;
-    const migrated = normalizeSharedState({
-      users: user ? [user] : [],
-      rooms: Array.isArray(legacy.rooms) ? legacy.rooms : [],
-      favorites: user && legacy.favorite ? { [user.id]: legacy.favorite } : {},
-      updatedAt: Date.now(),
-    });
-    roomStore.save(migrated, false);
-    if (user && !loadSessionUser()) saveSessionUser(user);
-    if (legacy.activeRoomId) sessionStorage.setItem("potonchu.activeRoomId", legacy.activeRoomId);
-    return migrated;
+    if (localStorage.getItem(HISTORY_RESET_KEY) === "done") return;
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
+    localStorage.removeItem(SHARED_STORAGE_KEY);
+    sessionStorage.removeItem(ACTIVE_ROOM_KEY);
+    localStorage.setItem(HISTORY_RESET_KEY, "done");
   } catch (error) {
-    return createSharedState();
+    // 保存を使えないブラウザでも画面はそのまま動かします。
   }
 }
 
@@ -323,6 +326,219 @@ function saveSessionUser(user) {
 
 function clearSessionUser() {
   sessionStorage.removeItem(SESSION_USER_KEY);
+}
+
+function getFirebaseConfig() {
+  return window.POTONCHU_FIREBASE_CONFIG || {};
+}
+
+function hasFirebaseConfig() {
+  const config = getFirebaseConfig();
+  return Boolean(config.apiKey && config.authDomain && config.projectId && config.appId);
+}
+
+function isFirebaseMode() {
+  return backend.mode === "firebase" && backend.firebase?.db;
+}
+
+async function initBackend() {
+  if (!hasFirebaseConfig()) {
+    backend.ready = true;
+    render();
+    return;
+  }
+
+  try {
+    const [appModule, authModule, firestoreModule] = await Promise.all([
+      import(`https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}/firebase-app.js`),
+      import(`https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}/firebase-auth.js`),
+      import(`https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}/firebase-firestore.js`),
+    ]);
+
+    const firebaseApp = appModule.initializeApp(getFirebaseConfig());
+    const auth = authModule.getAuth(firebaseApp);
+    const db = firestoreModule.getFirestore(firebaseApp);
+    backend.mode = "firebase";
+    backend.ready = true;
+    backend.status = "Firebaseでリアルタイム同期します。";
+    backend.firebase = { appModule, authModule, firestoreModule, app: firebaseApp, auth, db };
+
+    authModule.onAuthStateChanged(auth, async (firebaseUser) => {
+      if (!firebaseUser) {
+        clearSessionUser();
+        sharedState = createSharedState();
+        cleanupFirebaseSubscriptions();
+        if (!["login", "setup"].includes(ui.view)) ui.view = "login";
+        render();
+        return;
+      }
+
+      const user = await loadFirebaseUser(firebaseUser);
+      saveSessionUser(user);
+      upsertLocalUser(user);
+      if (user.favoritePoem) {
+        sharedState = normalizeSharedState({
+          ...sharedState,
+          favorites: { ...sharedState.favorites, [user.id]: user.favoritePoem },
+        });
+      }
+      subscribeFirebaseRooms(user.id);
+      await routeAfterAuth();
+    });
+
+    render();
+  } catch (error) {
+    backend.ready = true;
+    backend.mode = "demo";
+    backend.status = "Firebaseの読み込みに失敗しました。設定を確認してください。";
+    render();
+  }
+}
+
+async function signInWithFirebase() {
+  if (!isFirebaseMode()) return false;
+  try {
+    const { authModule, auth } = backend.firebase;
+    const provider = new authModule.GoogleAuthProvider();
+    await authModule.signInWithPopup(auth, provider);
+    return true;
+  } catch (error) {
+    showToast("Googleログインを完了できませんでした。");
+    return false;
+  }
+}
+
+async function signOutCurrentUser() {
+  if (isFirebaseMode()) {
+    await backend.firebase.authModule.signOut(backend.firebase.auth);
+  }
+  clearSessionUser();
+  sessionStorage.removeItem(ACTIVE_ROOM_KEY);
+  cleanupFirebaseSubscriptions();
+}
+
+async function loadFirebaseUser(firebaseUser) {
+  const { firestoreModule, db } = backend.firebase;
+  const userRef = firestoreModule.doc(db, "users", firebaseUser.uid);
+  const snapshot = await firestoreModule.getDoc(userRef);
+  const saved = snapshot.exists() ? snapshot.data() : {};
+  const user = normalizeUser({
+    id: firebaseUser.uid,
+    name: saved.displayName || firebaseUser.displayName || "ぽとん",
+    icon: "ぽ",
+    photoURL: saved.photoURL || firebaseUser.photoURL || "",
+    customIconURL: saved.customIconURL || "",
+    provider: "firebase",
+    createdAt: toMillis(saved.createdAt) || Date.now(),
+  });
+  user.favoritePoem = saved.favoritePoem || null;
+  await firestoreModule.setDoc(
+    userRef,
+    {
+      displayName: user.name,
+      photoURL: user.photoURL || "",
+      customIconURL: user.customIconURL || "",
+      updatedAt: firestoreModule.serverTimestamp(),
+    },
+    { merge: true },
+  );
+  return user;
+}
+
+function cleanupFirebaseSubscriptions() {
+  backend.roomUnsubscribe?.();
+  backend.roomUnsubscribe = null;
+  backend.messageUnsubscribes.forEach((unsubscribe) => unsubscribe());
+  backend.messageUnsubscribes.clear();
+  backend.seenMemberIds.clear();
+}
+
+function subscribeFirebaseRooms(userId) {
+  if (!isFirebaseMode()) return;
+  const { firestoreModule, db } = backend.firebase;
+  backend.roomUnsubscribe?.();
+  const roomsQuery = firestoreModule.query(
+    firestoreModule.collection(db, "rooms"),
+    firestoreModule.where("memberIds", "array-contains", userId),
+  );
+  backend.roomUnsubscribe = firestoreModule.onSnapshot(roomsQuery, (snapshot) => {
+    const nextRooms = snapshot.docs.map((roomDoc) => normalizeFirebaseRoom(roomDoc));
+    sharedState = normalizeSharedState({
+      ...sharedState,
+      rooms: nextRooms.map((room) => {
+        const existing = sharedState.rooms.find((item) => item.id === room.id);
+        return { ...room, messages: existing?.messages || [] };
+      }),
+    });
+    watchRoomMemberChanges(nextRooms);
+    nextRooms.forEach((room) => subscribeFirebaseMessages(room.id));
+    render();
+  });
+}
+
+function subscribeFirebaseMessages(roomId) {
+  if (!isFirebaseMode() || backend.messageUnsubscribes.has(roomId)) return;
+  const { firestoreModule, db } = backend.firebase;
+  const messagesQuery = firestoreModule.query(
+    firestoreModule.collection(db, "rooms", roomId, "messages"),
+    firestoreModule.orderBy("createdAt", "asc"),
+  );
+  const unsubscribe = firestoreModule.onSnapshot(messagesQuery, (snapshot) => {
+    const messages = snapshot.docs.map((messageDoc) => normalizeFirebaseMessage(roomId, messageDoc));
+    sharedState = normalizeSharedState({
+      ...sharedState,
+      rooms: sharedState.rooms.map((room) => (room.id === roomId ? { ...room, messages } : room)),
+    });
+    if (["home", "chat"].includes(ui.view)) render();
+  });
+  backend.messageUnsubscribes.set(roomId, unsubscribe);
+}
+
+function normalizeFirebaseRoom(roomDoc) {
+  const data = roomDoc.data();
+  return normalizeRoom({
+    id: roomDoc.id,
+    name: data.roomName || data.name,
+    type: data.type,
+    createdBy: data.createdBy,
+    inviteCode: data.inviteCode || roomDoc.id,
+    members: Array.isArray(data.members) ? data.members : [],
+    messages: [],
+    createdAt: toMillis(data.createdAt) || data.createdAtMillis,
+  });
+}
+
+function normalizeFirebaseMessage(roomId, messageDoc) {
+  const data = messageDoc.data();
+  return normalizeMessage({
+    id: messageDoc.id,
+    roomId,
+    topic: data.topic,
+    lines: data.poemLines,
+    poemLines: data.poemLines,
+    selectedWord: data.selectedWord,
+    senderId: data.senderId,
+    senderName: data.senderName,
+    senderPhoto: data.senderPhoto,
+    author: {
+      id: data.senderId,
+      name: data.senderName,
+      photoURL: data.senderPhoto,
+      customIconURL: data.senderPhoto,
+    },
+    reactions: data.reactions || {},
+    createdAt: toMillis(data.createdAt) || data.createdAtMillis,
+  });
+}
+
+function watchRoomMemberChanges(rooms) {
+  rooms.forEach((room) => {
+    const previous = backend.seenMemberIds.get(room.id) || new Set();
+    const current = new Set(room.members.map((member) => member.id));
+    const joined = room.members.find((member) => !previous.has(member.id) && member.id !== appState.user?.id);
+    backend.seenMemberIds.set(room.id, current);
+    if (joined && room.id === appState.activeRoomId && ui.view === "chat") showToast(`${joined.name}が入りました`);
+  });
 }
 
 function render() {
@@ -348,13 +564,13 @@ function render() {
 }
 
 function refreshAppState() {
-  sharedState = roomStore.load();
+  if (backend.mode !== "firebase") sharedState = roomStore.load();
   const user = loadSessionUser();
   appState = {
     user,
     rooms: sharedState.rooms,
     favorite: user ? sharedState.favorites?.[user.id] || null : null,
-    activeRoomId: sessionStorage.getItem("potonchu.activeRoomId") || appState?.activeRoomId || null,
+    activeRoomId: sessionStorage.getItem(ACTIVE_ROOM_KEY) || appState?.activeRoomId || null,
   };
 }
 
@@ -363,12 +579,16 @@ function handleSharedUpdate() {
   if (["home", "chat"].includes(ui.view)) render();
 }
 
-window.addEventListener("storage", (event) => {
-  if (event.key === SHARED_STORAGE_KEY) handleSharedUpdate();
-});
-
 roomChannel?.addEventListener("message", (event) => {
-  if (event.data?.type === "shared-state-updated") handleSharedUpdate();
+  if (backend.mode === "firebase") return;
+  if (event.data?.type === "request-demo-state" && demoState.rooms.length) {
+    roomChannel.postMessage({ type: "demo-state-updated", state: demoState });
+  }
+  if (event.data?.type === "demo-state-updated" && event.data.state) {
+    demoState = normalizeSharedState(event.data.state);
+    watchRoomMemberChanges(demoState.rooms);
+    handleSharedUpdate();
+  }
 });
 
 function renderLogin() {
@@ -383,12 +603,12 @@ function renderLogin() {
             <p class="brand-subcopy">一首しか送れないチャット。</p>
           </div>
         </div>
-        <p class="login-copy">普通の文章は送れません。話したいお題から一首を引いて、選んだ言葉だけをぽとんと落として送ります。</p>
+        <p class="login-copy">話したいことを10字で置いて、ことばを選んで、友達にぽとんと送る。普通の文章は送れません。</p>
         <button type="button" class="google-button" data-action="google-login">
           <span class="google-dot">G</span>
           Googleでログイン
         </button>
-        <p class="small-note">今はモックです。Firebase Authenticationに差し替えやすい形で分けています。</p>
+        <p class="small-note">${escapeHtml(backend.status)}</p>
         ${inviteNote}
       </div>
     </section>
@@ -449,6 +669,7 @@ function renderHome() {
           ${renderRoomList()}
         </section>
         <aside class="panel">
+          ${renderProfileCard()}
           <div class="panel-header">
             <div>
               <p class="eyebrow">favorite</p>
@@ -475,12 +696,34 @@ function renderTopbar(actions = "") {
       </div>
       <div class="top-actions">
         <div class="account-chip">
-          <span class="avatar">${escapeHtml(user.icon)}</span>
+          ${renderAvatar(user)}
           <span class="account-name">${escapeHtml(user.name)}</span>
         </div>
         ${actions}
       </div>
     </header>
+  `;
+}
+
+function renderProfileCard() {
+  const user = appState.user;
+  const previewUser = ui.pendingPhoto ? { ...user, customIconURL: ui.pendingPhoto } : user;
+  return `
+    <div class="profile-card">
+      <div>
+        <p class="eyebrow">profile</p>
+        <h2>プロフィール写真</h2>
+      </div>
+      <div class="profile-photo-row">
+        ${renderAvatar(previewUser, "avatar profile-avatar")}
+        <div class="profile-photo-actions">
+          <input class="visually-hidden-file" id="profilePhotoInput" type="file" accept="image/*" />
+          <button type="button" class="copy-button" data-action="choose-profile-photo">写真をえらぶ</button>
+          ${ui.pendingPhoto ? `<button type="button" class="primary-button" data-action="save-profile-photo">この写真にする</button>` : ""}
+        </div>
+      </div>
+      <p class="small-note">写真は丸いアイコンとして表示されます。</p>
+    </div>
   `;
 }
 
@@ -497,6 +740,8 @@ function renderRoomList() {
   return `
     <div class="room-list">
       ${appState.rooms
+        .slice()
+        .sort((a, b) => b.createdAt - a.createdAt)
         .map(
           (room) => `
             <button type="button" class="room-item" data-action="open-room" data-room-id="${escapeAttribute(room.id)}">
@@ -599,11 +844,12 @@ function renderChat() {
           <h1>${escapeHtml(room.name)}</h1>
         </div>
         <div class="participant-stack" aria-label="参加者">
-          ${room.members.map((member) => `<span class="avatar small" title="${escapeAttribute(member.name)}">${escapeHtml(member.icon)}</span>`).join("")}
+          ${room.members.map((member) => renderAvatar(member, "avatar small", member.name)).join("")}
         </div>
       </header>
 
       <section class="message-list" aria-label="一首チャット">
+        ${renderRoomStatus(room)}
         ${renderReflectionCard(room)}
         ${renderMessages(room)}
       </section>
@@ -614,6 +860,18 @@ function renderChat() {
       </section>
     </section>
   `;
+}
+
+function renderRoomStatus(room) {
+  if (room.members.length <= 1) {
+    return `
+      <div class="room-status-card">
+        <p>まだ相手がいません。招待リンクを送ってみる。</p>
+        <button type="button" class="copy-button" data-action="copy-invite" data-room-id="${escapeAttribute(room.id)}">招待リンクをコピー</button>
+      </div>
+    `;
+  }
+  return "";
 }
 
 function renderMessages(room) {
@@ -639,7 +897,7 @@ function renderMessage(message, room) {
   return `
     <article class="message-row ${isMine ? "is-mine" : ""}">
       <div class="message-meta ${isMine ? "is-mine" : ""}">
-        ${isMine ? "" : `<span class="avatar small">${escapeHtml(message.author.icon)}</span>`}
+        ${isMine ? "" : renderAvatar(message.author, "avatar small", message.author.name)}
         <span>${escapeHtml(message.author.name)} ・ ${formatDate(message.createdAt)}</span>
       </div>
       <div class="poem-bubble">
@@ -648,7 +906,7 @@ function renderMessage(message, room) {
         <div class="reaction-row">${renderReactionSummary(message)}</div>
         <div class="message-footer">
           <button type="button" class="mini-button" data-action="favorite-message" data-message-id="${escapeAttribute(message.id)}">よりしろにする</button>
-          <button type="button" class="mini-button reaction-toggle" data-action="toggle-reaction-picker" data-message-id="${escapeAttribute(message.id)}">リアクションする</button>
+          <button type="button" class="mini-button reaction-toggle" data-action="toggle-reaction-picker" data-message-id="${escapeAttribute(message.id)}">＋ リアクション</button>
         </div>
       </div>
       ${ui.openReactionFor === message.id ? renderReactionPicker(message, room) : ""}
@@ -894,21 +1152,24 @@ function selectedRadio(form, name) {
   return form.querySelector(`input[name="${name}"]:checked`)?.value || "";
 }
 
-function handleClick(event) {
+async function handleClick(event) {
   const button = event.target.closest("[data-action]");
   if (!button) return;
 
   const action = button.dataset.action;
 
   if (action === "google-login") {
+    if (isFirebaseMode()) {
+      await signInWithFirebase();
+      return;
+    }
     ui.view = "setup";
     render();
     return;
   }
 
   if (action === "logout") {
-    clearSessionUser();
-    sessionStorage.removeItem("potonchu.activeRoomId");
+    await signOutCurrentUser();
     ui.view = "login";
     render();
     showToast("ログアウトしました。");
@@ -930,7 +1191,7 @@ function handleClick(event) {
   }
 
   if (action === "open-room") {
-    setActiveRoom(button.dataset.roomId);
+    await setActiveRoom(button.dataset.roomId);
     ui.view = "chat";
     render();
     return;
@@ -980,12 +1241,12 @@ function handleClick(event) {
   }
 
   if (action === "send-poem") {
-    sendPoem();
+    await sendPoem();
     return;
   }
 
   if (action === "toggle-reaction") {
-    toggleReaction(button.dataset.roomId, button.dataset.messageId, button.dataset.reaction);
+    await toggleReaction(button.dataset.roomId, button.dataset.messageId, button.dataset.reaction);
     return;
   }
 
@@ -996,7 +1257,17 @@ function handleClick(event) {
   }
 
   if (action === "favorite-message") {
-    saveFavorite(button.dataset.messageId);
+    await saveFavorite(button.dataset.messageId);
+    return;
+  }
+
+  if (action === "choose-profile-photo") {
+    document.querySelector("#profilePhotoInput")?.click();
+    return;
+  }
+
+  if (action === "save-profile-photo") {
+    await saveProfilePhoto();
     return;
   }
 
@@ -1009,11 +1280,11 @@ function handleClick(event) {
   }
 
   if (action === "copy-invite") {
-    copyInvite(button.dataset.roomId);
+    await copyInvite(button.dataset.roomId);
   }
 }
 
-function handleSubmit(event) {
+async function handleSubmit(event) {
   const form = event.target.closest("[data-form]");
   if (!form) return;
   event.preventDefault();
@@ -1034,8 +1305,8 @@ function handleSubmit(event) {
       createdAt: Date.now(),
     };
     saveSessionUser(user);
-    upsertUser(user);
-    routeAfterAuth();
+    await upsertUser(user);
+    await routeAfterAuth();
     return;
   }
 
@@ -1047,13 +1318,8 @@ function handleSubmit(event) {
       return;
     }
 
-    const room = createRoom(name, type);
-    sharedState = roomStore.update((data) => {
-      data.rooms = [room, ...data.rooms];
-      return data;
-    });
-    refreshAppState();
-    setActiveRoom(room.id);
+    const room = await createRoom(name, type);
+    await setActiveRoom(room.id);
     ui.createResultId = room.id;
     render();
     showToast("招待リンクを作りました。");
@@ -1077,15 +1343,19 @@ function handleSubmit(event) {
 }
 
 function handleInput(event) {
+  if (event.target.id === "profilePhotoInput") {
+    handleProfilePhotoSelection(event.target.files?.[0]);
+    return;
+  }
   if (event.target.id !== "topicInput") return;
   ui.topic = event.target.value;
   updateTopicCounter();
 }
 
-function routeAfterAuth() {
+async function routeAfterAuth() {
   if (ui.pendingInviteRoomId) {
-    const room = ensureJoinedRoom(ui.pendingInviteRoomId);
-    setActiveRoom(room.id);
+    const room = await ensureJoinedRoom(ui.pendingInviteRoomId);
+    await setActiveRoom(room.id);
     ui.view = "chat";
     render();
     showToast("招待リンクから参加しました。");
@@ -1096,9 +1366,9 @@ function routeAfterAuth() {
   render();
 }
 
-function createRoom(name, type) {
+async function createRoom(name, type) {
   const id = makeId("room");
-  return {
+  const room = {
     id,
     name,
     type,
@@ -1108,19 +1378,79 @@ function createRoom(name, type) {
     messages: [],
     createdAt: Date.now(),
   };
+  if (isFirebaseMode()) {
+    const { firestoreModule, db } = backend.firebase;
+    await firestoreModule.setDoc(firestoreModule.doc(db, "rooms", id), {
+      roomName: name,
+      type,
+      createdBy: appState.user.id,
+      inviteCode: id,
+      memberIds: [appState.user.id],
+      members: createMembersForRoom(type),
+      createdAt: firestoreModule.serverTimestamp(),
+      createdAtMillis: room.createdAt,
+    });
+    upsertLocalRoom(room);
+    return room;
+  }
+  sharedState = roomStore.update((data) => {
+    data.rooms = [room, ...data.rooms.filter((item) => item.id !== room.id)];
+    return data;
+  });
+  refreshAppState();
+  return room;
 }
 
 function createMembersForRoom(type) {
-  const current = {
-    id: appState.user.id,
-    name: appState.user.name,
-    icon: appState.user.icon,
-  };
+  const current = normalizeUser(appState.user);
   return [current];
 }
 
-function ensureJoinedRoom(roomId) {
+async function ensureJoinedRoom(roomId) {
   let room = findRoom(roomId);
+  if (isFirebaseMode()) {
+    const { firestoreModule, db } = backend.firebase;
+    const roomRef = firestoreModule.doc(db, "rooms", roomId);
+    const snapshot = await firestoreModule.getDoc(roomRef);
+    const member = normalizeUser(appState.user);
+    if (!snapshot.exists()) {
+      room = {
+        id: roomId,
+        name: ui.pendingInviteName || `招待ルーム ${roomId.slice(-4).toUpperCase()}`,
+        type: ui.pendingInviteType === "pair" ? "pair" : "group",
+        createdBy: appState.user.id,
+        inviteCode: roomId,
+        members: [member],
+        messages: [],
+        createdAt: Date.now(),
+      };
+      await firestoreModule.setDoc(roomRef, {
+        roomName: room.name,
+        type: room.type,
+        createdBy: appState.user.id,
+        inviteCode: roomId,
+        memberIds: [member.id],
+        members: [member],
+        createdAt: firestoreModule.serverTimestamp(),
+        createdAtMillis: room.createdAt,
+      });
+      upsertLocalRoom(room);
+      return room;
+    }
+    room = normalizeFirebaseRoom(snapshot);
+    const hasUser = room.members.some((item) => item.id === member.id);
+    if (!hasUser) {
+      await firestoreModule.updateDoc(roomRef, {
+        memberIds: firestoreModule.arrayUnion(member.id),
+        members: firestoreModule.arrayUnion(member),
+      });
+      room.members.push(member);
+    }
+    upsertLocalRoom(room);
+    subscribeFirebaseMessages(roomId);
+    return room;
+  }
+
   if (!room) {
     room = {
       id: roomId,
@@ -1155,8 +1485,32 @@ function ensureJoinedRoom(roomId) {
   return room;
 }
 
-function upsertUser(user) {
+async function upsertUser(user) {
   const normalized = normalizeUser(user);
+  if (isFirebaseMode()) {
+    const { firestoreModule, db } = backend.firebase;
+    await firestoreModule.setDoc(
+      firestoreModule.doc(db, "users", normalized.id),
+      {
+        displayName: normalized.name,
+        photoURL: normalized.photoURL || "",
+        customIconURL: normalized.customIconURL || "",
+        updatedAt: firestoreModule.serverTimestamp(),
+      },
+      { merge: true },
+    );
+  }
+  upsertLocalUser(normalized);
+}
+
+function upsertLocalUser(user) {
+  const normalized = normalizeUser(user);
+  if (backend.mode === "firebase") {
+    const users = sharedState.users.filter((item) => item.id !== normalized.id);
+    sharedState = normalizeSharedState({ ...sharedState, users: [...users, normalized] });
+    refreshAppState();
+    return;
+  }
   sharedState = roomStore.update((data) => {
     const index = data.users.findIndex((item) => item.id === normalized.id);
     if (index >= 0) data.users[index] = normalized;
@@ -1166,10 +1520,19 @@ function upsertUser(user) {
   refreshAppState();
 }
 
-function setActiveRoom(roomId) {
+function upsertLocalRoom(room) {
+  sharedState = normalizeSharedState({
+    ...sharedState,
+    rooms: [room, ...sharedState.rooms.filter((item) => item.id !== room.id)],
+  });
+  if (backend.mode !== "firebase") roomStore.save(sharedState);
+  refreshAppState();
+}
+
+async function setActiveRoom(roomId) {
   appState.activeRoomId = roomId;
-  sessionStorage.setItem("potonchu.activeRoomId", roomId);
-  if (appState.user) ensureJoinedRoom(roomId);
+  sessionStorage.setItem(ACTIVE_ROOM_KEY, roomId);
+  if (appState.user) await ensureJoinedRoom(roomId);
 }
 
 function spinGacha(topic, previousTemplateId = "") {
@@ -1210,7 +1573,7 @@ function chooseWord(choice) {
   }, 980);
 }
 
-function sendPoem() {
+async function sendPoem() {
   const room = currentRoom();
   const composer = ui.composer;
   if (!room || !composer?.draft || !composer.selectedChoice) return;
@@ -1223,33 +1586,62 @@ function sendPoem() {
     lines,
     poemLines: lines,
     selectedWord: composer.selectedChoice,
-    author: {
-      id: appState.user.id,
-      name: appState.user.name,
-      icon: appState.user.icon,
-    },
+    author: normalizeUser(appState.user),
     senderId: appState.user.id,
     senderName: appState.user.name,
-    senderPhoto: appState.user.icon,
+    senderPhoto: getAvatarImage(appState.user) || appState.user.icon,
     reactions: {},
     createdAt: Date.now(),
   };
 
-  sharedState = roomStore.update((data) => {
-    const target = data.rooms.find((item) => item.id === room.id);
-    if (target) target.messages.push(message);
-    return data;
-  });
-  setActiveRoom(room.id);
+  if (isFirebaseMode()) {
+    const { firestoreModule, db } = backend.firebase;
+    await firestoreModule.addDoc(firestoreModule.collection(db, "rooms", room.id, "messages"), {
+      senderId: appState.user.id,
+      senderName: appState.user.name,
+      senderPhoto: getAvatarImage(appState.user) || appState.user.icon,
+      topic: composer.topic,
+      poemLines: lines,
+      selectedWord: composer.selectedChoice,
+      reactions: {},
+      createdAt: firestoreModule.serverTimestamp(),
+      createdAtMillis: message.createdAt,
+    });
+  } else {
+    sharedState = roomStore.update((data) => {
+      const target = data.rooms.find((item) => item.id === room.id);
+      if (target) target.messages.push(message);
+      return data;
+    });
+  }
+  await setActiveRoom(room.id);
   ui.composer = null;
   ui.topic = "";
   ui.openReactionFor = "";
   ui.view = "chat";
   render();
-  showToast("一首だけ送りました。");
+  showToast("ぽとんと届きました");
 }
 
-function toggleReaction(roomId, messageId, label) {
+async function toggleReaction(roomId, messageId, label) {
+  if (isFirebaseMode()) {
+    const { firestoreModule, db } = backend.firebase;
+    const messageRef = firestoreModule.doc(db, "rooms", roomId, "messages", messageId);
+    await firestoreModule.runTransaction(db, async (transaction) => {
+      const snapshot = await transaction.get(messageRef);
+      if (!snapshot.exists()) return;
+      const reactions = normalizeReactions(snapshot.data().reactions || {});
+      if (!reactions[label]) reactions[label] = [];
+      const users = reactions[label];
+      const index = users.indexOf(appState.user.id);
+      if (index >= 0) users.splice(index, 1);
+      else users.push(appState.user.id);
+      transaction.update(messageRef, { reactions });
+    });
+    ui.openReactionFor = "";
+    render();
+    return;
+  }
   sharedState = roomStore.update((data) => {
     const room = data.rooms.find((item) => item.id === roomId);
     const message = room?.messages.find((item) => item.id === messageId);
@@ -1265,7 +1657,7 @@ function toggleReaction(roomId, messageId, label) {
   render();
 }
 
-function saveFavorite(messageId) {
+async function saveFavorite(messageId) {
   const room = currentRoom();
   const message = room?.messages.find((item) => item.id === messageId);
   if (!message) return;
@@ -1279,12 +1671,135 @@ function saveFavorite(messageId) {
     authorName: message.author.name,
     savedAt: Date.now(),
   };
-  sharedState = roomStore.update((data) => {
-    data.favorites[appState.user.id] = appState.favorite;
-    return data;
-  });
+  if (isFirebaseMode()) {
+    sharedState = normalizeSharedState({
+      ...sharedState,
+      favorites: { ...sharedState.favorites, [appState.user.id]: appState.favorite },
+    });
+    const { firestoreModule, db } = backend.firebase;
+    await firestoreModule.setDoc(
+      firestoreModule.doc(db, "users", appState.user.id),
+      {
+        favoritePoem: appState.favorite,
+        updatedAt: firestoreModule.serverTimestamp(),
+      },
+      { merge: true },
+    );
+  } else {
+    sharedState = roomStore.update((data) => {
+      data.favorites[appState.user.id] = appState.favorite;
+      return data;
+    });
+  }
   render();
   showToast("お気に入りの一句を置き換えました。");
+}
+
+async function handleProfilePhotoSelection(file) {
+  if (!file) return;
+  if (!file.type.startsWith("image/")) {
+    showToast("画像ファイルを選んでください。");
+    return;
+  }
+  try {
+    ui.pendingPhoto = await resizeImageToDataUrl(file, 180);
+    render();
+  } catch (error) {
+    showToast("写真を読み込めませんでした。");
+  }
+}
+
+async function saveProfilePhoto() {
+  if (!ui.pendingPhoto || !appState.user) return;
+  const updatedUser = normalizeUser({
+    ...appState.user,
+    customIconURL: ui.pendingPhoto,
+  });
+  if (isFirebaseMode()) {
+    const { firestoreModule, db } = backend.firebase;
+    await firestoreModule.setDoc(
+      firestoreModule.doc(db, "users", updatedUser.id),
+      {
+        displayName: updatedUser.name,
+        photoURL: updatedUser.photoURL || "",
+        customIconURL: updatedUser.customIconURL,
+        updatedAt: firestoreModule.serverTimestamp(),
+      },
+      { merge: true },
+    );
+    await updateSenderPhotoInJoinedRooms(updatedUser);
+  }
+  saveSessionUser(updatedUser);
+  updateLocalProfile(updatedUser);
+  ui.pendingPhoto = "";
+  render();
+  showToast("写真をアイコンにしました。");
+}
+
+async function updateSenderPhotoInJoinedRooms(user) {
+  if (!isFirebaseMode()) return;
+  const { firestoreModule, db } = backend.firebase;
+  await Promise.all(
+    sharedState.rooms.map((room) => {
+      const roomRef = firestoreModule.doc(db, "rooms", room.id);
+      const nextMembers = room.members.map((member) => (member.id === user.id ? user : member));
+      return firestoreModule.setDoc(
+        roomRef,
+        {
+          members: nextMembers,
+          updatedAt: firestoreModule.serverTimestamp(),
+        },
+        { merge: true },
+      );
+    }),
+  );
+}
+
+function updateLocalProfile(user) {
+  const normalized = normalizeUser(user);
+  sharedState = normalizeSharedState({
+    ...sharedState,
+    users: [...sharedState.users.filter((item) => item.id !== normalized.id), normalized],
+    rooms: sharedState.rooms.map((room) => ({
+      ...room,
+      members: room.members.map((member) => (member.id === normalized.id ? normalized : member)),
+      messages: room.messages.map((message) =>
+        message.author.id === normalized.id
+          ? {
+              ...message,
+              author: normalized,
+              senderPhoto: getAvatarImage(normalized) || normalized.icon,
+            }
+          : message,
+      ),
+    })),
+  });
+  if (backend.mode !== "firebase") roomStore.save(sharedState);
+  refreshAppState();
+}
+
+function resizeImageToDataUrl(file, size) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const image = new Image();
+      image.onload = () => {
+        const canvas = document.createElement("canvas");
+        const context = canvas.getContext("2d");
+        const side = Math.min(image.width, image.height);
+        const sx = (image.width - side) / 2;
+        const sy = (image.height - side) / 2;
+        canvas.width = size;
+        canvas.height = size;
+        context.drawImage(image, sx, sy, side, side, 0, 0, size, size);
+        resolve(canvas.toDataURL("image/jpeg", 0.82));
+      };
+      image.onerror = reject;
+      image.src = reader.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 }
 
 const poemProvider = {
@@ -1402,6 +1917,21 @@ function currentRoom() {
   return findRoom(appState.activeRoomId);
 }
 
+function renderAvatar(user, className = "avatar", title = "") {
+  const image = getAvatarImage(user);
+  const titleAttribute = title ? ` title="${escapeAttribute(title)}"` : "";
+  if (image) return `<span class="${escapeAttribute(className)}"${titleAttribute}><img src="${escapeAttribute(image)}" alt="" /></span>`;
+  return `<span class="${escapeAttribute(className)}"${titleAttribute}>${escapeHtml(user?.icon || "ぽ")}</span>`;
+}
+
+function getAvatarImage(user) {
+  return user?.customIconURL || user?.photoURL || (isImageValue(user?.icon) ? user.icon : "");
+}
+
+function isImageValue(value) {
+  return typeof value === "string" && (value.startsWith("data:image/") || value.startsWith("http://") || value.startsWith("https://"));
+}
+
 function findRoom(roomId) {
   return appState.rooms.find((room) => room.id === roomId);
 }
@@ -1438,12 +1968,22 @@ function shuffle(items) {
 }
 
 function formatDate(value) {
+  const millis = toMillis(value) || Date.now();
   return new Intl.DateTimeFormat("ja-JP", {
     month: "numeric",
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
-  }).format(value);
+  }).format(millis);
+}
+
+function toMillis(value) {
+  if (!value) return 0;
+  if (typeof value === "number") return value;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value.toMillis === "function") return value.toMillis();
+  const parsed = new Date(value).getTime();
+  return Number.isNaN(parsed) ? 0 : parsed;
 }
 
 function escapeHtml(text) {
@@ -1464,3 +2004,4 @@ app.addEventListener("submit", handleSubmit);
 app.addEventListener("input", handleInput);
 
 render();
+initBackend();
