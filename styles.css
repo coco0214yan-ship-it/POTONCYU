@@ -644,6 +644,25 @@ h1,
   font-weight: 900;
 }
 
+.room-status-card.is-error {
+  border-color: rgba(201, 93, 117, 0.32);
+  background: rgba(255, 215, 223, 0.62);
+}
+
+.room-status-card.is-error p {
+  color: var(--strawberry-deep);
+}
+
+.status-code {
+  justify-self: end;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--strawberry-deep);
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
 .message-row {
   display: grid;
   gap: 7px;

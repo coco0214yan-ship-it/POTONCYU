@@ -173,6 +173,7 @@ const backend = {
   firebase: null,
   roomUnsubscribe: null,
   messageUnsubscribes: new Map(),
+  messageErrors: new Map(),
   seenMemberIds: new Map(),
 };
 if (hasFirebaseConfig()) backend.status = "Firebaseへ接続中です。";
@@ -461,36 +462,52 @@ function subscribeFirebaseRooms(userId) {
     firestoreModule.collection(db, "rooms"),
     firestoreModule.where("memberIds", "array-contains", userId),
   );
-  backend.roomUnsubscribe = firestoreModule.onSnapshot(roomsQuery, (snapshot) => {
-    const nextRooms = snapshot.docs.map((roomDoc) => normalizeFirebaseRoom(roomDoc));
-    sharedState = normalizeSharedState({
-      ...sharedState,
-      rooms: nextRooms.map((room) => {
-        const existing = sharedState.rooms.find((item) => item.id === room.id);
-        return { ...room, messages: existing?.messages || [] };
-      }),
-    });
-    watchRoomMemberChanges(nextRooms);
-    nextRooms.forEach((room) => subscribeFirebaseMessages(room.id));
-    render();
-  });
+  backend.roomUnsubscribe = firestoreModule.onSnapshot(
+    roomsQuery,
+    (snapshot) => {
+      const nextRooms = snapshot.docs.map((roomDoc) => normalizeFirebaseRoom(roomDoc));
+      sharedState = normalizeSharedState({
+        ...sharedState,
+        rooms: nextRooms.map((room) => {
+          const existing = sharedState.rooms.find((item) => item.id === room.id);
+          return { ...room, messages: existing?.messages || [] };
+        }),
+      });
+      watchRoomMemberChanges(nextRooms);
+      nextRooms.forEach((room) => subscribeFirebaseMessages(room.id));
+      render();
+    },
+    (error) => {
+      backend.status = "ルームを読み込めません。Firebaseのルールを確認してください。";
+      showToast("ルームを読み込めませんでした。");
+      render();
+    },
+  );
 }
 
 function subscribeFirebaseMessages(roomId) {
   if (!isFirebaseMode() || backend.messageUnsubscribes.has(roomId)) return;
   const { firestoreModule, db } = backend.firebase;
-  const messagesQuery = firestoreModule.query(
-    firestoreModule.collection(db, "rooms", roomId, "messages"),
-    firestoreModule.orderBy("createdAt", "asc"),
+  const messagesQuery = firestoreModule.collection(db, "rooms", roomId, "messages");
+  const unsubscribe = firestoreModule.onSnapshot(
+    messagesQuery,
+    (snapshot) => {
+      backend.messageErrors.delete(roomId);
+      const messages = snapshot.docs
+        .map((messageDoc) => normalizeFirebaseMessage(roomId, messageDoc))
+        .sort((a, b) => a.createdAt - b.createdAt);
+      sharedState = normalizeSharedState({
+        ...sharedState,
+        rooms: sharedState.rooms.map((room) => (room.id === roomId ? { ...room, messages } : room)),
+      });
+      if (["home", "chat"].includes(ui.view)) render();
+    },
+    (error) => {
+      backend.messageErrors.set(roomId, error.code || error.message || "unknown");
+      showToast("一首を読み込めません。");
+      render();
+    },
   );
-  const unsubscribe = firestoreModule.onSnapshot(messagesQuery, (snapshot) => {
-    const messages = snapshot.docs.map((messageDoc) => normalizeFirebaseMessage(roomId, messageDoc));
-    sharedState = normalizeSharedState({
-      ...sharedState,
-      rooms: sharedState.rooms.map((room) => (room.id === roomId ? { ...room, messages } : room)),
-    });
-    if (["home", "chat"].includes(ui.view)) render();
-  });
   backend.messageUnsubscribes.set(roomId, unsubscribe);
 }
 
@@ -863,6 +880,15 @@ function renderChat() {
 }
 
 function renderRoomStatus(room) {
+  const messageError = backend.messageErrors.get(room.id);
+  if (messageError) {
+    return `
+      <div class="room-status-card is-error">
+        <p>一首の読み込みが止まっています。FirebaseのFirestoreルールを確認してください。</p>
+        <span class="status-code">${escapeHtml(messageError)}</span>
+      </div>
+    `;
+  }
   if (room.members.length <= 1) {
     return `
       <div class="room-status-card">
@@ -1521,9 +1547,27 @@ function upsertLocalUser(user) {
 }
 
 function upsertLocalRoom(room) {
+  const existing = sharedState.rooms.find((item) => item.id === room.id);
+  const nextRoom = {
+    ...room,
+    messages: room.messages?.length ? room.messages : existing?.messages || [],
+  };
   sharedState = normalizeSharedState({
     ...sharedState,
-    rooms: [room, ...sharedState.rooms.filter((item) => item.id !== room.id)],
+    rooms: [nextRoom, ...sharedState.rooms.filter((item) => item.id !== room.id)],
+  });
+  if (backend.mode !== "firebase") roomStore.save(sharedState);
+  refreshAppState();
+}
+
+function upsertLocalMessage(roomId, message) {
+  sharedState = normalizeSharedState({
+    ...sharedState,
+    rooms: sharedState.rooms.map((room) => {
+      if (room.id !== roomId) return room;
+      const messages = [message, ...room.messages.filter((item) => item.id !== message.id)].sort((a, b) => a.createdAt - b.createdAt);
+      return { ...room, messages };
+    }),
   });
   if (backend.mode !== "firebase") roomStore.save(sharedState);
   refreshAppState();
@@ -1596,23 +1640,31 @@ async function sendPoem() {
 
   if (isFirebaseMode()) {
     const { firestoreModule, db } = backend.firebase;
-    await firestoreModule.addDoc(firestoreModule.collection(db, "rooms", room.id, "messages"), {
-      senderId: appState.user.id,
-      senderName: appState.user.name,
-      senderPhoto: getAvatarImage(appState.user) || appState.user.icon,
-      topic: composer.topic,
-      poemLines: lines,
-      selectedWord: composer.selectedChoice,
-      reactions: {},
-      createdAt: firestoreModule.serverTimestamp(),
-      createdAtMillis: message.createdAt,
-    });
+    try {
+      const docRef = await firestoreModule.addDoc(firestoreModule.collection(db, "rooms", room.id, "messages"), {
+        senderId: appState.user.id,
+        senderName: appState.user.name,
+        senderPhoto: getAvatarImage(appState.user) || appState.user.icon,
+        topic: composer.topic,
+        poemLines: lines,
+        selectedWord: composer.selectedChoice,
+        reactions: {},
+        createdAt: firestoreModule.serverTimestamp(),
+        createdAtMillis: message.createdAt,
+      });
+      message.id = docRef.id;
+      upsertLocalMessage(room.id, message);
+    } catch (error) {
+      showToast("一首を送れませんでした。");
+      return;
+    }
   } else {
     sharedState = roomStore.update((data) => {
       const target = data.rooms.find((item) => item.id === room.id);
       if (target) target.messages.push(message);
       return data;
     });
+    upsertLocalMessage(room.id, message);
   }
   await setActiveRoom(room.id);
   ui.composer = null;
