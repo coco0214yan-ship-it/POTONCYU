@@ -7,6 +7,7 @@ const SESSION_USER_KEY = "potonchu.sessionUser.v1";
 const ACTIVE_ROOM_KEY = "potonchu.activeRoomId";
 const HISTORY_RESET_KEY = "potonchu.historyReset.v5";
 const FIREBASE_SDK_VERSION = "12.15.0";
+const FIREBASE_MESSAGING_SW_PATH = "./firebase-messaging-sw.js";
 const BLANK = "__POTON_BLANK__";
 
 const topicGroups = [
@@ -27,6 +28,21 @@ const reactionOptions = [
 const gachaCaptions = ["ことばをころころ中", "一首を探しています", "お題に合うことばを回しています", "ぽとんと届く一首を選んでいます"];
 const reflectionCopies = ["昨日の一首、まだ残ってる？", "昨日のこれ、ちょっと話す？", "あの一首の続き、送ってみる？", "昨日のぽとん、今日どうなった？", "一晩たって、まだ刺さってる？"];
 const reflectionQuestions = ["この一首、今もわかる？", "昨日より気持ち変わった？", "この一首、誰に近かった？", "続きがあるなら何を送る？", "今日の返事を一首にする？"];
+
+const choicePhraseBank = [
+  { tags: ["明日どうする", "今日どうする", "予定", "予定決めよ"], choices: ["決めきれない", "笑ってしまう", "先に聞きたい", "ちょっと迷う", "会えたらいい"] },
+  { tags: ["集合時間", "何時集合", "時間", "遅刻"], choices: ["早めに行く", "たぶん遅れる", "待っている", "笑って許す", "まだ決まらない"] },
+  { tags: ["どこ行く", "どっちにする", "決められない"], choices: ["迷ってる", "任せたい", "ノリで行く", "歩きたい", "どっちでもいい"] },
+  { tags: ["夜ごはん", "何食べる", "ラーメン", "ごはん", "まだ食べる"], choices: ["帰りたくない", "まだいたい", "誘ってみる", "お腹すいた", "少し歩きたい"] },
+  { tags: ["カフェ行こ", "カフェ", "空きコマ"], choices: ["話したい", "迷ってる", "少しだけ", "誘ってみる", "課題はあとで"] },
+  { tags: ["会いたい", "また話そ", "話したい", "ちょい寂しい"], choices: ["言えなくて", "待っている", "気づいてほしい", "まだ話したい", "なんとなく続く"] },
+  { tags: ["なんか暇", "暇"], choices: ["連絡したい", "だらだらしたい", "名前を探す", "話せたらいい", "なんとなく待つ"] },
+  { tags: ["ごめん", "言いすぎた", "気まずい"], choices: ["言えなかった", "意地を張る", "まだ迷う", "言い直したい", "気づいてほしい"] },
+  { tags: ["ありがとう", "助かった"], choices: ["ちゃんと言いたい", "照れてしまう", "残しておきたい", "助けられてる", "少し軽くなる"] },
+  { tags: ["帰り道", "駅まで", "駅"], choices: ["待っている", "言えなかった", "まだいたい", "帰りたくない", "遠回りする"] },
+  { tags: ["バイト後", "授業後", "眠すぎる", "終わった"], choices: ["もう眠い", "話したい", "少し休みたい", "返事を待つ", "ふらふら帰る"] },
+  { tags: ["誰来る", "グループ", "ノリで行く"], choices: ["君を探す", "なんとなく行く", "空気で決まる", "笑ってしまう", "誰か待ってる"] },
+];
 
 const poemLibrary = [
   {
@@ -312,6 +328,150 @@ const poemLibrary = [
     choices: ["本気", "ノリ", "号令", "眠気"],
   },
   {
+    id: "plan-ashita-3",
+    tags: ["明日どうする", "明日", "予定", "集合時間"],
+    lines: ["明日どうする", "決めたそばから", BLANK, "天気のことを", "誰かが言った"],
+    choices: ["迷ってる", "傘いるかも", "早めに行く", "ノリ"],
+  },
+  {
+    id: "plan-today-3",
+    tags: ["今日どうする", "今日", "どこ行く", "予定"],
+    lines: ["今日どうする", "予定の前に", BLANK, "なんでもない話", "先に始まる"],
+    choices: ["歩きたい", "決めきれない", "駅前", "笑ってしまう"],
+  },
+  {
+    id: "plan-where-3",
+    tags: ["どこ行く", "予定", "寄り道", "今日どうする"],
+    lines: ["どこ行くか", "地図より先に", BLANK, "足の向くほう", "少し信じる"],
+    choices: ["歩きたい", "迷ってる", "コンビニ", "任せたい"],
+  },
+  {
+    id: "plan-time-3",
+    tags: ["集合時間", "何時集合", "時間", "予定"],
+    lines: ["集合時間", "決める画面で", BLANK, "誰かの既読が", "ゆっくり増える"],
+    choices: ["待っている", "たぶん遅れる", "五分前", "笑って許す"],
+  },
+  {
+    id: "food-night-3",
+    tags: ["夜ごはん", "夜", "ごはん", "帰り道"],
+    lines: ["夜ごはん", "どこでもいいよと", BLANK, "言ったあとから", "駅が遠のく"],
+    choices: ["まだいたい", "帰りたくない", "ラーメン", "少し歩く"],
+  },
+  {
+    id: "food-ramen-2",
+    tags: ["ラーメン", "夜ごはん", "バイト後", "ごはん"],
+    lines: ["ラーメンの", "湯気を理由に", BLANK, "今日の話を", "少し伸ばした"],
+    choices: ["話したい", "替え玉する", "黙っている", "お腹すいた"],
+  },
+  {
+    id: "food-cafe-3",
+    tags: ["カフェ行こ", "カフェ", "空きコマ", "話したい"],
+    lines: ["カフェ行こ", "課題のふりで", BLANK, "甘いものより", "話したいこと"],
+    choices: ["誘ってみる", "迷ってる", "少しだけ", "課題のこと"],
+  },
+  {
+    id: "food-more-2",
+    tags: ["まだ食べる", "何食べる", "夜ごはん", "ごはん"],
+    lines: ["まだ食べる", "そのひとことで", BLANK, "帰る理由が", "ひとつ減ってく"],
+    choices: ["帰りたくない", "デザート", "まだいたい", "笑ってしまう"],
+  },
+  {
+    id: "feeling-meet-4",
+    tags: ["会いたい", "また話そ", "ちょい寂しい"],
+    lines: ["会いたいと", "言うほどでもない", BLANK, "でも通知だけ", "少し待ってる"],
+    choices: ["気がしてる", "言えなくて", "夜のこと", "帰り道"],
+  },
+  {
+    id: "feeling-talk-3",
+    tags: ["話したい", "また話そ", "あとで話そ"],
+    lines: ["話したい", "用件だけなら", BLANK, "もう終わってる", "はずだったのに"],
+    choices: ["まだ話したい", "言えなかった", "くだらないこと", "待っている"],
+  },
+  {
+    id: "feeling-bored-2",
+    tags: ["なんか暇", "暇", "会いたい"],
+    lines: ["なんか暇", "送る直前", BLANK, "ほんとの名前を", "そっと隠した"],
+    choices: ["連絡したい", "だらだらする", "会いたい", "プリン"],
+  },
+  {
+    id: "feeling-lonely-2",
+    tags: ["ちょい寂しい", "寂しい", "夜", "また話そ"],
+    lines: ["ちょい寂しい", "大げさにせず", BLANK, "画面の端に", "置いてみただけ"],
+    choices: ["気づいてほしい", "言えなくて", "月曜日", "なんとなく続く"],
+  },
+  {
+    id: "relation-sorry-4",
+    tags: ["ごめん", "気まずい", "言いすぎた"],
+    lines: ["ごめんねを", "言えばいいのに", BLANK, "遠回りして", "一首で送る"],
+    choices: ["言えなかった", "意地を張る", "まだ迷う", "タイミング"],
+  },
+  {
+    id: "relation-thanks-3",
+    tags: ["ありがとう", "助かった", "ありがと"],
+    lines: ["ありがとう", "軽く押したら", BLANK, "軽すぎる気が", "してしまうから"],
+    choices: ["ちゃんと言いたい", "照れてしまう", "助かった", "残しておく"],
+  },
+  {
+    id: "relation-awkward-2",
+    tags: ["気まずい", "ごめん", "言いすぎた"],
+    lines: ["気まずいね", "言えたらたぶん", BLANK, "笑えるくらいに", "戻れるのかな"],
+    choices: ["言い直したい", "まだ迷う", "既読", "近づきたい"],
+  },
+  {
+    id: "relation-helped-2",
+    tags: ["助かった", "ありがとう", "バイト後"],
+    lines: ["助かった", "それだけ送る", BLANK, "ほんとはもっと", "救われていた"],
+    choices: ["ちゃんと言う", "照れてしまう", "おつかれ", "少し泣ける"],
+  },
+  {
+    id: "daily-way-4",
+    tags: ["帰り道", "駅まで", "また話そ"],
+    lines: ["帰り道", "改札前で", BLANK, "さよならだけが", "少し遅れる"],
+    choices: ["待っている", "言えなかった", "まだいたい", "コンビニ"],
+  },
+  {
+    id: "daily-class-2",
+    tags: ["授業後", "空きコマ", "眠すぎる"],
+    lines: ["授業後の", "ざわざわしたまま", BLANK, "聞きたいことが", "鞄に残る"],
+    choices: ["話したい", "眠すぎる", "聞けなかった", "ノート"],
+  },
+  {
+    id: "daily-baito-2",
+    tags: ["バイト後", "終わった", "夜ごはん"],
+    lines: ["バイト後に", "おつかれだけじゃ", BLANK, "足りない夜を", "少し歩いた"],
+    choices: ["話したい", "もう眠い", "ラーメン", "待っている"],
+  },
+  {
+    id: "daily-sleepy-2",
+    tags: ["眠すぎる", "授業後", "帰り道"],
+    lines: ["眠すぎる", "なのに返事を", BLANK, "待ってる自分に", "少し笑った"],
+    choices: ["待っている", "寝落ちする", "言えなかった", "甘いもの"],
+  },
+  {
+    id: "group-who-2",
+    tags: ["誰来る", "グループ", "集合時間"],
+    lines: ["誰来るの", "聞いてるふりで", BLANK, "来てほしい人", "ひとり浮かべる"],
+    choices: ["君を探す", "名前を待つ", "みんな", "言えなくて"],
+  },
+  {
+    id: "group-vibe-2",
+    tags: ["ノリで行く", "グループ", "どこ行く"],
+    lines: ["ノリで行く", "その一言に", BLANK, "地図にないほう", "選ばれていく"],
+    choices: ["歩きたい", "なんとなく行く", "勢い", "笑ってしまう"],
+  },
+  {
+    id: "group-cant-2",
+    tags: ["決められない", "どっちにする", "グループ"],
+    lines: ["決められない", "ままの時間が", BLANK, "なぜかいちばん", "グループらしい"],
+    choices: ["空気で決まる", "脱線する", "多数決", "まだ迷う"],
+  },
+  {
+    id: "group-time-2",
+    tags: ["何時集合", "集合時間", "グループ"],
+    lines: ["何時集合", "言ったそばから", BLANK, "遅刻の未来", "少し笑える"],
+    choices: ["たぶん遅れる", "待っている", "五分前", "笑って許す"],
+  },
+  {
     id: "default-1",
     tags: [],
     lines: ["{{topic}}", "うまく言えずに", BLANK, "湯気の向こうで", "君を見ている"],
@@ -337,6 +497,9 @@ const backend = {
   messageUnsubscribes: new Map(),
   messageErrors: new Map(),
   seenMemberIds: new Map(),
+  notificationStatus: "通知はまだ設定されていません。",
+  notificationToken: "",
+  serviceWorkerRegistration: null,
 };
 if (hasFirebaseConfig()) backend.status = "Firebaseへ接続中です。";
 let demoState = createSharedState();
@@ -523,10 +686,14 @@ async function initBackend() {
     const firebaseApp = appModule.initializeApp(getFirebaseConfig());
     const auth = authModule.getAuth(firebaseApp);
     const db = firestoreModule.getFirestore(firebaseApp);
+    const messagingModule = await loadFirebaseMessagingModule();
+    const messaging = messagingModule ? messagingModule.getMessaging(firebaseApp) : null;
     backend.mode = "firebase";
     backend.ready = true;
     backend.status = "Firebaseでリアルタイム同期します。";
-    backend.firebase = { appModule, authModule, firestoreModule, app: firebaseApp, auth, db };
+    backend.notificationStatus = messaging ? "スマホ通知を使うには、この端末で通知を許可してください。" : "このブラウザでは通知を使えない可能性があります。";
+    backend.firebase = { appModule, authModule, firestoreModule, messagingModule, app: firebaseApp, auth, db, messaging };
+    setupForegroundNotifications();
 
     authModule.onAuthStateChanged(auth, async (firebaseUser) => {
       if (!firebaseUser) {
@@ -558,6 +725,19 @@ async function initBackend() {
     backend.status = "Firebaseの読み込みに失敗しました。設定を確認してください。";
     render();
   }
+}
+
+async function loadFirebaseMessagingModule() {
+  if (!canUseBrowserNotifications()) return null;
+  try {
+    return await import(`https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}/firebase-messaging.js`);
+  } catch (error) {
+    return null;
+  }
+}
+
+function canUseBrowserNotifications() {
+  return "Notification" in window && "serviceWorker" in navigator;
 }
 
 async function signInWithFirebase() {
@@ -911,6 +1091,14 @@ function renderProfileCard() {
         </div>
       </div>
       <p class="small-note">写真は丸いアイコンとして表示されます。</p>
+      <div class="notification-box">
+        <div>
+          <p class="eyebrow">notification</p>
+          <h3>スマホ通知</h3>
+          <p class="small-note">${escapeHtml(backend.notificationStatus)}</p>
+        </div>
+        <button type="button" class="copy-button" data-action="enable-notifications">通知を受け取る</button>
+      </div>
     </div>
   `;
 }
@@ -1469,6 +1657,11 @@ async function handleClick(event) {
     return;
   }
 
+  if (action === "enable-notifications") {
+    await enableNotifications();
+    return;
+  }
+
   if (action === "reply-yesterday") {
     ui.topic = "昨日の続き";
     ui.composer = null;
@@ -1835,6 +2028,9 @@ async function sendPoem() {
         poemLines: lines,
         selectedWord: composer.selectedChoice,
         reactions: {},
+        notificationTitle: `${appState.user.name}さんから一首`,
+        notificationBody: "ぽとんと一首が届きました。",
+        notificationUrl: makeRoomUrl(room.id),
         createdAt: firestoreModule.serverTimestamp(),
         createdAtMillis: message.createdAt,
       });
@@ -1977,6 +2173,99 @@ async function saveProfilePhoto() {
   showToast("写真をアイコンにしました。");
 }
 
+async function enableNotifications() {
+  if (!appState.user) {
+    showToast("先にログインしてください。");
+    return;
+  }
+  if (!isFirebaseMode()) {
+    showToast("通知にはFirebase接続が必要です。");
+    return;
+  }
+  if (!canUseBrowserNotifications() || !backend.firebase.messagingModule || !backend.firebase.messaging) {
+    backend.notificationStatus = "このブラウザでは通知を使えない可能性があります。";
+    render();
+    return;
+  }
+
+  const vapidKey = getMessagingVapidKey();
+  if (!vapidKey) {
+    backend.notificationStatus = "Firebaseの通知用公開鍵を設定すると使えます。";
+    render();
+    showToast("通知用の公開鍵がまだ空です。");
+    return;
+  }
+
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") {
+    backend.notificationStatus = "通知が許可されていません。スマホ側の通知設定を確認してください。";
+    render();
+    return;
+  }
+
+  try {
+    const registration = await navigator.serviceWorker.register(FIREBASE_MESSAGING_SW_PATH, { scope: "./" });
+    backend.serviceWorkerRegistration = registration;
+    const token = await backend.firebase.messagingModule.getToken(backend.firebase.messaging, {
+      vapidKey,
+      serviceWorkerRegistration: registration,
+    });
+    if (!token) {
+      backend.notificationStatus = "通知の登録がまだ完了していません。少し後でもう一度試してください。";
+      render();
+      return;
+    }
+
+    await saveNotificationToken(token);
+    backend.notificationToken = token;
+    backend.notificationStatus = "この端末で通知を受け取れます。";
+    render();
+    showToast("通知を受け取れるようにしました。");
+  } catch (error) {
+    backend.notificationStatus = "通知の登録に失敗しました。Firebase設定を確認してください。";
+    render();
+    showToast("通知の登録に失敗しました。");
+  }
+}
+
+async function saveNotificationToken(token) {
+  const { firestoreModule, db } = backend.firebase;
+  const tokenId = tokenToDocId(token);
+  await firestoreModule.setDoc(
+    firestoreModule.doc(db, "users", appState.user.id, "notificationTokens", tokenId),
+    {
+      token,
+      userId: appState.user.id,
+      userName: appState.user.name,
+      roomIds: appState.rooms.map((room) => room.id),
+      userAgent: navigator.userAgent,
+      updatedAt: firestoreModule.serverTimestamp(),
+    },
+    { merge: true },
+  );
+}
+
+function setupForegroundNotifications() {
+  const messagingModule = backend.firebase?.messagingModule;
+  const messaging = backend.firebase?.messaging;
+  if (!messagingModule || !messaging) return;
+  messagingModule.onMessage(messaging, (payload) => {
+    const roomId = payload.data?.roomId || "";
+    const senderName = payload.data?.senderName || "誰か";
+    if (roomId && roomId !== appState.activeRoomId) showToast(`${senderName}さんから一首が届きました。`);
+    else showToast("新しい一首が届きました。");
+  });
+}
+
+function getMessagingVapidKey() {
+  const config = getFirebaseConfig();
+  return window.POTONCHU_FIREBASE_MESSAGING_VAPID_KEY || config.messagingVapidKey || "";
+}
+
+function tokenToDocId(token) {
+  return token.replaceAll("/", "_").replaceAll("+", "-").replaceAll("=", "");
+}
+
 async function updateSenderPhotoInJoinedRooms(user) {
   if (!isFirebaseMode()) return;
   const { firestoreModule, db } = backend.firebase;
@@ -2068,10 +2357,50 @@ const poemProvider = {
       templateId: template.id,
       topic: normalizedTopic,
       lines: template.lines.map((line) => line.replaceAll("{{topic}}", normalizedTopic)),
-      choices: shuffle(template.choices).slice(0, 4),
+      choices: buildChoices(template, normalizedTopic),
     };
   },
 };
+
+function buildChoices(template, topic) {
+  const phraseChoices = choicePhraseBank
+    .filter((group) => group.tags.some((tag) => topic === tag || topic.includes(tag) || tag.includes(topic) || template.tags.includes(tag)))
+    .flatMap((group) => group.choices);
+  const fallbackPhrases = ["言えなかった", "待っている", "まだいたい", "迷ってる", "話したい", "気づいてほしい"];
+  const templatePool = shuffle(template.choices);
+  const phrasePool = shuffle([...phraseChoices, ...fallbackPhrases]);
+  const result = [];
+
+  addUniqueChoices(result, phrasePool.filter(isFeelingOrActionChoice), 2);
+  addUniqueChoices(result, templatePool, 3);
+  addUniqueChoices(result, phrasePool, 4);
+
+  while (result.length < 4) {
+    const next = pickOne(fallbackPhrases);
+    if (!result.includes(next)) result.push(next);
+  }
+
+  while (result.filter(isFeelingOrActionChoice).length < 2) {
+    const index = result.findIndex((choice) => !isFeelingOrActionChoice(choice));
+    const replacement = fallbackPhrases.find((choice) => !result.includes(choice));
+    if (index < 0 || !replacement) break;
+    result[index] = replacement;
+  }
+
+  return shuffle(result).slice(0, 4);
+}
+
+function addUniqueChoices(target, choices, maxLength) {
+  for (const choice of choices) {
+    if (!choice || target.includes(choice)) continue;
+    target.push(choice);
+    if (target.length >= maxLength) break;
+  }
+}
+
+function isFeelingOrActionChoice(choice) {
+  return /たい|てる|いる|ない|かった|迷う|迷って|待つ|待って|言う|言え|する|なる|ほしい|しまう|続く|行く|歩く|誘う|帰る/.test(choice);
+}
 
 function scorePoemTemplate(template, topic) {
   if (!template.tags.length) return 0;
@@ -2146,6 +2475,13 @@ function makeInviteLink(roomId) {
   url.searchParams.set("roomId", roomId);
   if (room?.name) url.searchParams.set("roomName", room.name);
   if (room?.type) url.searchParams.set("roomType", room.type);
+  url.hash = "";
+  return url.toString();
+}
+
+function makeRoomUrl(roomId) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("roomId", roomId);
   url.hash = "";
   return url.toString();
 }
