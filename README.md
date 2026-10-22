@@ -1,4 +1,4 @@
-C:/Users/Owner/Documents/coco/index.html
+https://coco0214yan-ship-it.github.io/POTONCYU/
 # ぽとんちゅ 穴あき一首ガチャ
 
 大学のがやがやした日常の中で、友達と空欄入りの一首を引き、4択で完成させる静的プロトタイプです。
