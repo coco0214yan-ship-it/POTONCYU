@@ -17,6 +17,8 @@ const POTONCHU_FIREBASE_MESSAGING_VAPID_KEY_VALUE = "";
 if (typeof window !== "undefined") {
   window.POTONCHU_FIREBASE_CONFIG = POTONCHU_FIREBASE_CONFIG_VALUE;
   window.POTONCHU_FIREBASE_MESSAGING_VAPID_KEY = POTONCHU_FIREBASE_MESSAGING_VAPID_KEY_VALUE;
+  // Enable after deploying generatePoems and registering its server-side secret.
+  window.POTONCHU_GENERATION_CONFIG = { enabled: false, region: "asia-northeast1" };
 }
 
 if (typeof self !== "undefined") {

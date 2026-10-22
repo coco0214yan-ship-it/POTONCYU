@@ -5,6 +5,8 @@ const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 
 initializeApp();
 
+exports.generatePoems = require("./generate-poems").generatePoems;
+
 exports.sendPoemNotification = onDocumentCreated("rooms/{roomId}/messages/{messageId}", async (event) => {
   const message = event.data?.data();
   if (!message) return;

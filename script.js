@@ -29,21 +29,6 @@ const gachaCaptions = ["ことばをころころ中", "一首を探していま�
 const reflectionCopies = ["昨日の一首、まだ残ってる？", "昨日のこれ、ちょっと話す？", "あの一首の続き、送ってみる？", "昨日のぽとん、今日どうなった？", "一晩たって、まだ刺さってる？"];
 const reflectionQuestions = ["この一首、今もわかる？", "昨日より気持ち変わった？", "この一首、誰に近かった？", "続きがあるなら何を送る？", "今日の返事を一首にする？"];
 
-const choicePhraseBank = [
-  { tags: ["明日どうする", "今日どうする", "予定", "予定決めよ"], choices: ["決めきれない", "笑ってしまう", "先に聞きたい", "ちょっと迷う", "会えたらいい"] },
-  { tags: ["集合時間", "何時集合", "時間", "遅刻"], choices: ["早めに行く", "たぶん遅れる", "待っている", "笑って許す", "まだ決まらない"] },
-  { tags: ["どこ行く", "どっちにする", "決められない"], choices: ["迷ってる", "任せたい", "ノリで行く", "歩きたい", "どっちでもいい"] },
-  { tags: ["夜ごはん", "何食べる", "ラーメン", "ごはん", "まだ食べる"], choices: ["帰りたくない", "まだいたい", "誘ってみる", "お腹すいた", "少し歩きたい"] },
-  { tags: ["カフェ行こ", "カフェ", "空きコマ"], choices: ["話したい", "迷ってる", "少しだけ", "誘ってみる", "課題はあとで"] },
-  { tags: ["会いたい", "また話そ", "話したい", "ちょい寂しい"], choices: ["言えなくて", "待っている", "気づいてほしい", "まだ話したい", "なんとなく続く"] },
-  { tags: ["なんか暇", "暇"], choices: ["連絡したい", "だらだらしたい", "名前を探す", "話せたらいい", "なんとなく待つ"] },
-  { tags: ["ごめん", "言いすぎた", "気まずい"], choices: ["言えなかった", "意地を張る", "まだ迷う", "言い直したい", "気づいてほしい"] },
-  { tags: ["ありがとう", "助かった"], choices: ["ちゃんと言いたい", "照れてしまう", "残しておきたい", "助けられてる", "少し軽くなる"] },
-  { tags: ["帰り道", "駅まで", "駅"], choices: ["待っている", "言えなかった", "まだいたい", "帰りたくない", "遠回りする"] },
-  { tags: ["バイト後", "授業後", "眠すぎる", "終わった"], choices: ["もう眠い", "話したい", "少し休みたい", "返事を待つ", "ふらふら帰る"] },
-  { tags: ["誰来る", "グループ", "ノリで行く"], choices: ["君を探す", "なんとなく行く", "空気で決まる", "笑ってしまう", "誰か待ってる"] },
-];
-
 const poemLibrary = [
   {
     id: "plan-ashita-1",
@@ -496,6 +481,8 @@ const backend = {
   roomUnsubscribe: null,
   messageUnsubscribes: new Map(),
   messageErrors: new Map(),
+  pendingReactions: new Map(),
+  reactionErrors: new Map(),
   seenMemberIds: new Map(),
   notificationStatus: "通知はまだ設定されていません。",
   notificationToken: "",
@@ -529,6 +516,7 @@ let ui = {
   composer: null,
   createResultId: null,
   openReactionFor: "",
+  reactionPulse: null,
   pendingPhoto: "",
   firebaseNoticeDismissed: false,
   pendingInviteRoomId: new URLSearchParams(window.location.search).get("roomId"),
@@ -796,6 +784,9 @@ function cleanupFirebaseSubscriptions() {
   backend.messageUnsubscribes.forEach((unsubscribe) => unsubscribe());
   backend.messageUnsubscribes.clear();
   backend.seenMemberIds.clear();
+  backend.pendingReactions.clear();
+  backend.reactionErrors.clear();
+  aiPoemQueues.clear();
 }
 
 function subscribeFirebaseRooms(userId) {
@@ -839,6 +830,7 @@ function subscribeFirebaseMessages(roomId) {
       backend.messageErrors.delete(roomId);
       const messages = snapshot.docs
         .map((messageDoc) => normalizeFirebaseMessage(roomId, messageDoc))
+        .map((message) => overlayPendingReactions(roomId, message))
         .sort((a, b) => a.createdAt - b.createdAt);
       const existingRoom = sharedState.rooms.find((room) => room.id === roomId);
       const pendingMessages = (existingRoom?.messages || []).filter(
@@ -1219,8 +1211,14 @@ function renderChat() {
           <p class="eyebrow">${room.type === "group" ? "group room" : "pair room"}</p>
           <h1>${escapeHtml(room.name)}</h1>
         </div>
-        <div class="participant-stack" aria-label="参加者">
-          ${room.members.map((member) => renderAvatar(member, "avatar small", member.name)).join("")}
+        <div class="chat-tools">
+          <label class="reaction-sound-toggle" title="リアクションの音を切り替える">
+            <input type="checkbox" data-setting="reaction-sound" aria-label="リアクションの音" ${PotonchuFeedback.enabled ? "checked" : ""} />
+            <span>音</span>
+          </label>
+          <div class="participant-stack" aria-label="参加者">
+            ${room.members.map((member) => renderAvatar(member, "avatar small", member.name)).join("")}
+          </div>
         </div>
       </header>
 
@@ -1280,6 +1278,9 @@ function renderMessages(room) {
 function renderMessage(message, room) {
   const isMine = message.author.id === appState.user.id;
   const statusText = message.status === "sending" ? " ・ 送信中" : message.status === "failed" ? " ・ 送れませんでした" : "";
+  const canReact = !message.status;
+  const reactionError = backend.reactionErrors.get(message.id);
+  const pulse = ui.reactionPulse?.messageId === message.id && ui.reactionPulse.until > Date.now() ? ui.reactionPulse : null;
   return `
     <article class="message-row ${isMine ? "is-mine" : ""}">
       <div class="message-meta ${isMine ? "is-mine" : ""}">
@@ -1289,34 +1290,42 @@ function renderMessage(message, room) {
       <div class="poem-bubble">
         <span class="message-topic">${escapeHtml(message.topic)}</span>
         ${renderPoemLines(message.lines)}
-        <div class="reaction-row">${renderReactionSummary(message)}</div>
+        <div class="reaction-row" aria-label="ついているリアクション">${renderReactionSummary(message, room)}</div>
+        ${pulse ? `<span class="reaction-pop" aria-hidden="true">${escapeHtml(pulse.label)}</span>` : ""}
         <div class="message-footer">
           <button type="button" class="mini-button" data-action="favorite-message" data-message-id="${escapeAttribute(message.id)}">お気に入りにする</button>
-          <button type="button" class="mini-button reaction-toggle" data-action="toggle-reaction-picker" data-message-id="${escapeAttribute(message.id)}">＋ リアクション</button>
+          <button type="button" class="mini-button reaction-toggle" data-action="toggle-reaction-picker" data-message-id="${escapeAttribute(message.id)}" aria-expanded="${ui.openReactionFor === message.id}" aria-controls="reactions-${escapeAttribute(message.id)}" ${canReact ? "" : "disabled"}>＋ リアクション</button>
         </div>
+        ${reactionError ? `<p class="reaction-error" role="status">${escapeHtml(reactionError)}</p>` : ""}
       </div>
       ${ui.openReactionFor === message.id ? renderReactionPicker(message, room) : ""}
     </article>
   `;
 }
 
-function renderReactionSummary(message) {
+function renderReactionSummary(message, room) {
   const activeReactions = Object.entries(message.reactions || {}).filter(([, users]) => users.length > 0);
   if (activeReactions.length === 0) return "";
   return activeReactions
-    .map(([label, users]) => `<span class="reaction-pill is-active">${escapeHtml(label)} ${users.length}</span>`)
+    .map(([label, users]) => {
+      const mine = users.includes(appState.user.id);
+      const pending = isReactionPending(room.id, message.id, label);
+      return `<button type="button" class="reaction-pill ${mine ? "is-active" : ""}" data-action="toggle-reaction" data-room-id="${escapeAttribute(room.id)}" data-message-id="${escapeAttribute(message.id)}" data-reaction="${escapeAttribute(label)}" aria-label="${escapeAttribute(label)} ${users.length}人" aria-pressed="${mine}" aria-busy="${pending}" ${pending || message.status ? "disabled" : ""}>${escapeHtml(label)} <span>${users.length}</span></button>`;
+    })
     .join("");
 }
 
 function renderReactionPicker(message, room) {
   return `
-    <div class="reaction-picker" aria-label="リアクション">
+    <div class="reaction-picker" id="reactions-${escapeAttribute(message.id)}" role="group" aria-label="リアクションをえらぶ">
+      <div class="reaction-picker-header"><span>どんな気持ち？</span><button type="button" class="reaction-close" data-action="toggle-reaction-picker" data-message-id="${escapeAttribute(message.id)}" aria-label="リアクションを閉じる" title="閉じる">×</button></div>
       ${reactionOptions
         .map((option) => {
           const users = message.reactions?.[option.id] || [];
           const active = users.includes(appState.user.id);
           const count = users.length ? ` ${users.length}` : "";
-          return `<button type="button" class="reaction-pill ${option.type === "emoji" ? "is-emoji" : ""} ${active ? "is-active" : ""}" data-action="toggle-reaction" data-room-id="${escapeAttribute(room.id)}" data-message-id="${escapeAttribute(message.id)}" data-reaction="${escapeAttribute(option.id)}">${escapeHtml(option.label)}${count}</button>`;
+          const pending = isReactionPending(room.id, message.id, option.id);
+          return `<button type="button" class="reaction-pill ${option.type === "emoji" ? "is-emoji" : ""} ${active ? "is-active" : ""}" data-action="toggle-reaction" data-room-id="${escapeAttribute(room.id)}" data-message-id="${escapeAttribute(message.id)}" data-reaction="${escapeAttribute(option.id)}" aria-pressed="${active}" aria-label="${escapeAttribute(option.label)}" ${pending ? "disabled" : ""}>${escapeHtml(option.label)}${count}</button>`;
         })
         .join("")}
     </div>
@@ -1360,10 +1369,10 @@ function renderTopic() {
         <form class="topic-form" data-form="topic">
           <label class="field-label">
             お題
-            <input id="topicInput" name="topic" maxlength="10" value="${escapeAttribute(ui.topic)}" placeholder="例：夜ごはん" autocomplete="off" />
+            <input id="topicInput" name="topic" value="${escapeAttribute(ui.topic)}" placeholder="例：テストやばい、雨の帰り道" autocomplete="off" />
           </label>
           <div class="counter-row" id="topicCounter">
-            <span>軽いお題でも大丈夫</span>
+            <span>好きなお題を自由に</span>
             <span id="topicCount">残り10字</span>
           </div>
           <div class="topic-example-wrap" aria-label="おすすめお題">
@@ -1540,7 +1549,14 @@ function selectedRadio(form, name) {
 
 async function handleClick(event) {
   const button = event.target.closest("[data-action]");
-  if (!button) return;
+  if (!button) {
+    if (event.target.closest(".reaction-sound-toggle")) return;
+    if (ui.openReactionFor && !event.target.closest(".reaction-picker")) {
+      ui.openReactionFor = "";
+      render();
+    }
+    return;
+  }
 
   const action = button.dataset.action;
 
@@ -1734,6 +1750,11 @@ async function handleSubmit(event) {
 }
 
 function handleInput(event) {
+  if (event.target.dataset.setting === "reaction-sound") {
+    PotonchuFeedback.setEnabled(event.target.checked);
+    if (event.target.checked) PotonchuFeedback.play();
+    return;
+  }
   if (event.target.id === "profilePhotoInput") {
     handleProfilePhotoSelection(event.target.files?.[0]);
     return;
@@ -1947,38 +1968,54 @@ async function setActiveRoom(roomId) {
   if (appState.user) await ensureJoinedRoom(roomId);
 }
 
-function spinGacha(topic, previousTemplateId = "") {
-  if (!topic) return;
+async function spinGacha(topic, previousTemplateId = "") {
+  topic = PotonchuPoems.normalizeTopic(topic);
+  if (!topic || countChars(topic) > 10) {
+    showToast("お題は1〜10字で入れてください。");
+    return;
+  }
   ui.view = "gacha";
-  ui.composer = {
+  const composer = {
     topic,
     step: "loading",
     draft: null,
     selectedChoice: "",
     loadingCopy: pickOne(gachaCaptions),
   };
+  ui.composer = composer;
   render();
 
-  window.setTimeout(() => {
-    if (!ui.composer || ui.composer.topic !== topic) return;
-    ui.composer.draft = poemProvider.generate(topic, previousTemplateId);
-    ui.composer.step = "gacha";
+  try {
+    const [draft] = await Promise.all([
+      generatePoem(topic, previousTemplateId, appState.activeRoomId),
+      new Promise((resolve) => window.setTimeout(resolve, 1700)),
+    ]);
+    if (ui.composer !== composer || ui.view !== "gacha") return;
+    composer.draft = draft;
+    composer.step = "gacha";
     render();
-  }, 1700);
+  } catch (error) {
+    if (ui.composer !== composer || ui.view !== "gacha") return;
+    ui.view = "topic";
+    render();
+    showToast("一首を用意できませんでした。もう一度まわしてみてください。");
+  }
 }
 
 function chooseWord(choice) {
   if (!ui.composer || ui.composer.step !== "gacha") return;
+  if (!ui.composer.draft?.choices.includes(choice)) return;
   ui.composer.selectedChoice = choice;
   ui.composer.step = "dropping";
   render();
 
+  const composer = ui.composer;
   window.setTimeout(() => {
-    if (!ui.composer || ui.composer.selectedChoice !== choice) return;
+    if (ui.composer !== composer || ui.composer.selectedChoice !== choice) return;
     ui.composer.step = "resting";
     render();
     window.setTimeout(() => {
-      if (!ui.composer || ui.composer.selectedChoice !== choice || ui.composer.step !== "resting") return;
+      if (ui.composer !== composer || ui.composer.selectedChoice !== choice || ui.composer.step !== "resting") return;
       ui.composer.step = "confirm";
       render();
     }, 1050);
@@ -1988,7 +2025,7 @@ function chooseWord(choice) {
 async function sendPoem() {
   const room = currentRoom();
   const composer = ui.composer;
-  if (!room || !composer?.draft || !composer.selectedChoice) return;
+  if (!room || !composer?.draft || composer.step !== "confirm" || !composer.draft.choices.includes(composer.selectedChoice)) return;
 
   const lines = completePoemLines(composer.draft, composer.selectedChoice);
   const clientId = makeId("client");
@@ -2061,37 +2098,93 @@ async function sendPoem() {
 }
 
 async function toggleReaction(roomId, messageId, label) {
-  if (isFirebaseMode()) {
-    const { firestoreModule, db } = backend.firebase;
-    const messageRef = firestoreModule.doc(db, "rooms", roomId, "messages", messageId);
-    await firestoreModule.runTransaction(db, async (transaction) => {
-      const snapshot = await transaction.get(messageRef);
-      if (!snapshot.exists()) return;
-      const reactions = normalizeReactions(snapshot.data().reactions || {});
-      if (!reactions[label]) reactions[label] = [];
-      const users = reactions[label];
-      const index = users.indexOf(appState.user.id);
-      if (index >= 0) users.splice(index, 1);
-      else users.push(appState.user.id);
-      transaction.update(messageRef, { reactions });
-    });
-    ui.openReactionFor = "";
+  const message = findRoom(roomId)?.messages.find((item) => item.id === messageId);
+  const userId = appState.user?.id;
+  if (!message || !userId || message.status || !reactionOptions.some((option) => option.id === label)) return;
+  const key = reactionKey(roomId, messageId, label);
+  if (backend.pendingReactions.has(key)) return;
+  if (isFirebaseMode() && navigator.onLine === false) {
+    showToast("つながってから、もう一度押してみてください。");
+    return;
+  }
+  const wasActive = (message.reactions[label] || []).includes(userId);
+  const adding = !wasActive;
+  backend.reactionErrors.delete(messageId);
+  ui.openReactionFor = "";
+  ui.reactionPulse = adding ? { messageId, label, until: Date.now() + 750 } : null;
+  PotonchuFeedback.play(adding, label);
+
+  if (!isFirebaseMode()) {
+    setLocalReaction(roomId, messageId, label, userId, adding);
     render();
     return;
   }
-  sharedState = roomStore.update((data) => {
-    const room = data.rooms.find((item) => item.id === roomId);
-    const message = room?.messages.find((item) => item.id === messageId);
-    if (!message) return data;
-    if (!message.reactions) message.reactions = {};
-    if (!message.reactions[label]) message.reactions[label] = [];
-    const users = message.reactions[label];
-    const index = users.indexOf(appState.user.id);
-    if (index >= 0) users.splice(index, 1);
-    else users.push(appState.user.id);
-    return data;
-  });
+
+  const pending = { roomId, messageId, label, userId, adding };
+  backend.pendingReactions.set(key, pending);
+  setLocalReaction(roomId, messageId, label, userId, adding);
   render();
+  try {
+    const { firestoreModule, db } = backend.firebase;
+    // Update only this label; simultaneous reactions from others are preserved.
+    await firestoreModule.updateDoc(
+      firestoreModule.doc(db, "rooms", roomId, "messages", messageId),
+      new firestoreModule.FieldPath("reactions", label),
+      adding ? firestoreModule.arrayUnion(userId) : firestoreModule.arrayRemove(userId),
+    );
+  } catch (error) {
+    if (appState.user?.id === userId) {
+      setLocalReaction(roomId, messageId, label, userId, wasActive);
+      const explanation = error.code === "permission-denied"
+        ? "リアクションを保存できませんでした。ルームの管理者に知らせてください。"
+        : "届きませんでした。もう一度押してみてください。";
+      backend.reactionErrors.set(messageId, explanation);
+      showToast(explanation);
+    }
+  } finally {
+    if (backend.pendingReactions.get(key) === pending) backend.pendingReactions.delete(key);
+    if (appState.user?.id === userId && ui.view === "chat") render();
+  }
+}
+
+function reactionKey(roomId, messageId, label) {
+  return JSON.stringify([roomId, messageId, label]);
+}
+
+function isReactionPending(roomId, messageId, label) {
+  return backend.pendingReactions.has(reactionKey(roomId, messageId, label));
+}
+
+function setLocalReaction(roomId, messageId, label, userId, adding) {
+  sharedState = normalizeSharedState({
+    ...sharedState,
+    rooms: sharedState.rooms.map((room) => room.id !== roomId ? room : {
+      ...room,
+      messages: room.messages.map((message) => message.id !== messageId ? message : {
+        ...message, reactions: reactionsWithChange(message.reactions, label, userId, adding),
+      }),
+    }),
+  });
+  if (!isFirebaseMode()) roomStore.save(sharedState);
+}
+
+function reactionsWithChange(reactions, label, userId, adding) {
+  const next = normalizeReactions(reactions);
+  const users = new Set(next[label] || []);
+  if (adding) users.add(userId);
+  else users.delete(userId);
+  next[label] = [...users];
+  return next;
+}
+
+function overlayPendingReactions(roomId, message) {
+  let reactions = message.reactions;
+  for (const pending of backend.pendingReactions.values()) {
+    if (pending.roomId === roomId && pending.messageId === message.id) {
+      reactions = reactionsWithChange(reactions, pending.label, pending.userId, pending.adding);
+    }
+  }
+  return { ...message, reactions };
 }
 
 async function saveFavorite(messageId) {
@@ -2332,93 +2425,39 @@ function resizeImageToDataUrl(file, size) {
   });
 }
 
-const poemProvider = {
-  generate(topic, previousTemplateId = "") {
-    const normalizedTopic = topic.trim();
-    const scored = poemLibrary
-      .map((template) => ({
-        template,
-        score: scorePoemTemplate(template, normalizedTopic),
-      }))
-      .sort((a, b) => b.score - a.score);
+const poemProvider = PotonchuPoems.createProvider(poemLibrary);
+const aiPoemQueues = new Map();
+let aiCallable = null;
+let aiUnavailableUntil = 0;
 
-    const bestScore = scored[0]?.score || 0;
-    const minimumScore = bestScore > 0 ? Math.max(1, bestScore - 3) : 0;
-    let pool = scored
-      .filter((item) => item.score >= minimumScore && item.score > 0)
-      .map((item) => item.template);
-    if (pool.length === 0) pool = poemLibrary.filter((template) => template.tags.length === 0);
-
-    const withoutPrevious = pool.filter((template) => template.id !== previousTemplateId);
-    if (withoutPrevious.length) pool = withoutPrevious;
-
-    const template = pickOne(pool.length ? pool : poemLibrary);
-    return {
-      templateId: template.id,
-      topic: normalizedTopic,
-      lines: template.lines.map((line) => line.replaceAll("{{topic}}", normalizedTopic)),
-      choices: buildChoices(template, normalizedTopic),
-    };
-  },
-};
-
-function buildChoices(template, topic) {
-  const phraseChoices = choicePhraseBank
-    .filter((group) => group.tags.some((tag) => topic === tag || topic.includes(tag) || tag.includes(topic) || template.tags.includes(tag)))
-    .flatMap((group) => group.choices);
-  const fallbackPhrases = ["言えなかった", "待っている", "まだいたい", "迷ってる", "話したい", "気づいてほしい"];
-  const templatePool = shuffle(template.choices);
-  const phrasePool = shuffle([...phraseChoices, ...fallbackPhrases]);
-  const result = [];
-
-  addUniqueChoices(result, phrasePool.filter(isFeelingOrActionChoice), 2);
-  addUniqueChoices(result, templatePool, 3);
-  addUniqueChoices(result, phrasePool, 4);
-
-  while (result.length < 4) {
-    const next = pickOne(fallbackPhrases);
-    if (!result.includes(next)) result.push(next);
+async function generatePoem(topic, previousTemplateId, roomId) {
+  const config = window.POTONCHU_GENERATION_CONFIG || {};
+  if (config.enabled && isFirebaseMode() && appState.user && roomId && Date.now() >= aiUnavailableUntil) {
+    const key = JSON.stringify([appState.user.id, roomId, topic]);
+    let queue = aiPoemQueues.get(key) || [];
+    try {
+      if (!queue.length) {
+        if (!aiCallable) {
+          const functionsModule = await import(`https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}/firebase-functions.js`);
+          aiCallable = functionsModule.httpsCallable(
+            functionsModule.getFunctions(backend.firebase.app, config.region || "asia-northeast1"),
+            "generatePoems", { timeout: 12000 },
+          );
+        }
+        const result = await aiCallable({ topic, roomId, avoid: poemProvider.recent(topic) });
+        queue = Array.isArray(result.data?.poems) ? result.data.poems.slice(0, 3) : [];
+        if (aiPoemQueues.size >= 40) aiPoemQueues.delete(aiPoemQueues.keys().next().value);
+        aiPoemQueues.set(key, queue);
+      }
+      while (queue.length) {
+        const draft = poemProvider.accept(topic, queue.shift());
+        if (draft) return draft;
+      }
+    } catch (error) {
+      aiUnavailableUntil = Date.now() + 60000;
+    }
   }
-
-  while (result.filter(isFeelingOrActionChoice).length < 2) {
-    const index = result.findIndex((choice) => !isFeelingOrActionChoice(choice));
-    const replacement = fallbackPhrases.find((choice) => !result.includes(choice));
-    if (index < 0 || !replacement) break;
-    result[index] = replacement;
-  }
-
-  return shuffle(result).slice(0, 4);
-}
-
-function addUniqueChoices(target, choices, maxLength) {
-  for (const choice of choices) {
-    if (!choice || target.includes(choice)) continue;
-    target.push(choice);
-    if (target.length >= maxLength) break;
-  }
-}
-
-function isFeelingOrActionChoice(choice) {
-  return /たい|てる|いる|ない|かった|迷う|迷って|待つ|待って|言う|言え|する|なる|ほしい|しまう|続く|行く|歩く|誘う|帰る/.test(choice);
-}
-
-function scorePoemTemplate(template, topic) {
-  if (!template.tags.length) return 0;
-  return template.tags.reduce((total, rawTag) => {
-    const tag = rawTag.trim();
-    if (!tag) return total;
-    if (topic === tag) return total + 12;
-    if (topic.includes(tag)) return total + (tag.length >= 3 ? 6 : 3);
-    if (tag.includes(topic)) return total + (topic.length >= 3 ? 5 : 2);
-    if (sharesTopicWords(topic, tag)) return total + 1;
-    return total;
-  }, 0);
-}
-
-function sharesTopicWords(topic, tag) {
-  const topicChars = Array.from(topic).filter((char) => ![" ", "　", "す", "る", "の"].includes(char));
-  if (topicChars.length < 2) return false;
-  return topicChars.some((char) => tag.includes(char));
+  return poemProvider.generate(topic, previousTemplateId);
 }
 
 function completePoemLines(draft, selectedChoice) {
@@ -2596,6 +2635,14 @@ function escapeAttribute(text) {
 app.addEventListener("click", handleClick);
 app.addEventListener("submit", handleSubmit);
 app.addEventListener("input", handleInput);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && ui.openReactionFor) {
+    const messageId = ui.openReactionFor;
+    ui.openReactionFor = "";
+    render();
+    Array.from(app.querySelectorAll(".reaction-toggle")).find((button) => button.dataset.messageId === messageId)?.focus();
+  }
+});
 
 render();
 initBackend();
