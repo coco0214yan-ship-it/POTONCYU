@@ -1,0 +1,4 @@
+window.POTONCHU_PREVIEW = true;
+window.POTONCHU_FIREBASE_CONFIG = {};
+window.POTONCHU_FIREBASE_MESSAGING_VAPID_KEY = "";
+window.POTONCHU_GENERATION_CONFIG = { enabled: false };

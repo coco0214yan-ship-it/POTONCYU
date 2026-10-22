@@ -1,0 +1,2908 @@
+const app = document.querySelector("#app");
+const toast = document.querySelector("#toast");
+
+const PREVIEW_MODE = window.POTONCHU_PREVIEW === true;
+const STORAGE_PREFIX = PREVIEW_MODE ? "potonchu.preview" : "potonchu";
+const LEGACY_STORAGE_KEY = `${STORAGE_PREFIX}.prototype.v1`;
+const SHARED_STORAGE_KEY = `${STORAGE_PREFIX}.shared.v2`;
+const SESSION_USER_KEY = `${STORAGE_PREFIX}.sessionUser.v1`;
+const ACTIVE_ROOM_KEY = `${STORAGE_PREFIX}.activeRoomId`;
+const HISTORY_RESET_KEY = `${STORAGE_PREFIX}.historyReset.v5`;
+const FIREBASE_SDK_VERSION = "12.15.0";
+const FIREBASE_MESSAGING_SW_PATH = "./firebase-messaging-sw.js";
+const BLANK = "__POTON_BLANK__";
+
+const topicGroups = [
+  { label: "予定", topics: ["明日どうする", "今日どうする", "予定決めよ", "集合時間", "どこ行く", "空きコマ"] },
+  { label: "ごはん", topics: ["夜ごはん", "何食べる", "カフェ行こ", "ラーメン", "寄り道", "まだ食べる"] },
+  { label: "気持ち", topics: ["会いたい", "また話そ", "なんか暇", "ちょい寂しい", "話したい", "あとで話そ"] },
+  { label: "関係性", topics: ["ごめん", "ありがとう", "助かった", "言いすぎた", "気まずい", "ちょい相談"] },
+  { label: "日常", topics: ["帰り道", "バイト後", "授業後", "眠すぎる", "駅まで", "終わった"] },
+  { label: "グループ", topics: ["誰来る", "何時集合", "ノリで行く", "決められない", "どっちにする", "集合時間"] },
+];
+const iconChoices = ["ぽ", "あ", "み", "こ", "ゆ", "と"];
+const reactionLabels = ["わかる", "それな", "今の誰", "また話そ", "笑った", "刺さった"];
+const emojiReactions = ["😂", "🥺", "👍", "💭", "🍵", "🌙", "🫶", "👀"];
+const reactionOptions = [
+  ...reactionLabels.map((label) => ({ id: label, label, type: "text" })),
+  ...emojiReactions.map((label) => ({ id: label, label, type: "emoji" })),
+];
+const gachaCaptions = ["ことばをころころ中", "一首を探しています", "お題に合うことばを回しています", "ぽとんと届く一首を選んでいます"];
+const reflectionCopies = ["昨日の一首、まだ残ってる？", "昨日のこれ、ちょっと話す？", "あの一首の続き、送ってみる？", "昨日のぽとん、今日どうなった？", "一晩たって、まだ刺さってる？"];
+const reflectionQuestions = ["この一首、今もわかる？", "昨日より気持ち変わった？", "この一首、誰に近かった？", "続きがあるなら何を送る？", "今日の返事を一首にする？"];
+
+const poemLibrary = [
+  {
+    id: "plan-ashita-1",
+    tags: ["明日どうする", "明日", "どうする", "予定", "予定決めよ"],
+    lines: ["明日どうする", "決めるつもりで", BLANK, "予定より先に", "笑ってしまう"],
+    choices: ["集合時間", "眠気", "ノリ", "空きコマ"],
+  },
+  {
+    id: "plan-ashita-2",
+    tags: ["明日どうする", "明日", "予定", "どっち"],
+    lines: ["明日のこと", "決める画面で", BLANK, "返事の速さに", "少し照れてる"],
+    choices: ["集合時間", "候補", "スタンプ", "本音"],
+  },
+  {
+    id: "plan-today-1",
+    tags: ["今日どうする", "今日", "どうする", "予定"],
+    lines: ["今日どうする", "決めるだけなのに", BLANK, "予定のすきま", "少し広がる"],
+    choices: ["ノリ", "眠気", "寄り道", "本音"],
+  },
+  {
+    id: "plan-today-2",
+    tags: ["今日どうする", "今日", "どこ行く", "予定"],
+    lines: ["今日どうする", "言いながらもう", BLANK, "改札の先を", "見ているふたり"],
+    choices: ["駅前", "空腹", "勢い", "寄り道"],
+  },
+  {
+    id: "plan-decide-1",
+    tags: ["予定決めよ", "予定", "決め", "話したい"],
+    lines: ["予定決めよ", "言い出したのは", BLANK, "ほんとは先に", "会いたかった"],
+    choices: ["段取り", "口実", "勢い", "空きコマ"],
+  },
+  {
+    id: "time-1",
+    tags: ["集合時間", "集合", "時間", "遅刻"],
+    lines: ["集合時間", "決めるだけでも", BLANK, "誰かの遅刻", "もう見えている"],
+    choices: ["空気", "ノリ", "不安", "笑い"],
+  },
+  {
+    id: "time-2",
+    tags: ["集合時間", "何時集合", "時間", "遅刻", "グループ"],
+    lines: ["何時集合", "早めに言って", BLANK, "遅れる予感も", "少し混ぜてる"],
+    choices: ["十分前", "既読", "笑い", "保険"],
+  },
+  {
+    id: "where-1",
+    tags: ["どこ行く", "どこ", "行く", "予定"],
+    lines: ["どこ行くの", "答えを待つより", BLANK, "同じほうへと", "歩き出してる"],
+    choices: ["ノリ", "夕方", "駅前", "寄り道"],
+  },
+  {
+    id: "where-2",
+    tags: ["どこ行く", "寄り道", "カフェ", "駅"],
+    lines: ["どこ行くか", "決まらないまま", BLANK, "候補の数だけ", "帰れなくなる"],
+    choices: ["カフェ", "公園", "ラーメン", "本音"],
+  },
+  {
+    id: "free-period-1",
+    tags: ["空きコマ", "コマ", "授業", "カフェ"],
+    lines: ["空きコマ", "埋めるつもりが", BLANK, "話のほうが", "先に座った"],
+    choices: ["課題", "カフェ", "眠気", "内緒話"],
+  },
+  {
+    id: "choice-1",
+    tags: ["どっち", "する", "決め", "グループ", "どっちにする"],
+    lines: ["どっちにする", "決まらないまま", BLANK, "みんなの顔が", "少しゆるむ"],
+    choices: ["多数決", "ノリ", "やさしさ", "迷い"],
+  },
+  {
+    id: "choice-2",
+    tags: ["どっちにする", "決められない", "迷う", "グループ"],
+    lines: ["どっちにする", "選べないのは", BLANK, "どちらにしても", "一緒だからで"],
+    choices: ["優柔不断", "多数決", "ノリ", "安心"],
+  },
+  {
+    id: "food-night-1",
+    tags: ["夜ごはん", "夜", "ごはん", "飯"],
+    lines: ["夜ごはん", "決めるふりして", BLANK, "ほんとは少し", "まだ歩きたい"],
+    choices: ["ラーメン", "寄り道", "空腹", "本音"],
+  },
+  {
+    id: "food-night-2",
+    tags: ["夜ごはん", "夜", "ごはん", "帰り道"],
+    lines: ["夜ごはん", "誘う言葉の", BLANK, "湯気より先に", "照れてしまった"],
+    choices: ["ラーメン", "カレー", "口実", "空腹"],
+  },
+  {
+    id: "food-what-1",
+    tags: ["何食べる", "食べる", "ごはん", "夜"],
+    lines: ["何食べる", "決まらないのは", BLANK, "まだ帰らない", "理由がほしい"],
+    choices: ["空腹", "優柔不断", "寄り道", "湯気"],
+  },
+  {
+    id: "food-what-2",
+    tags: ["何食べる", "夜ごはん", "ごはん", "どっち"],
+    lines: ["何食べる", "聞いたつもりで", BLANK, "ほんとは君の", "予定を聞いた"],
+    choices: ["空腹", "駅前", "本音", "甘いもの"],
+  },
+  {
+    id: "cafe-1",
+    tags: ["カフェ行こ", "カフェ", "空きコマ", "コマ"],
+    lines: ["空きコマに", "カフェでも行こ", BLANK, "課題のことは", "あとで思い出す"],
+    choices: ["甘いもの", "眠気", "本音", "充電"],
+  },
+  {
+    id: "cafe-2",
+    tags: ["カフェ行こ", "カフェ", "話したい", "空きコマ"],
+    lines: ["カフェ行こ", "軽く言うほど", BLANK, "聞いてほしいこと", "底に沈んでる"],
+    choices: ["アイスラテ", "本音", "課題", "沈黙"],
+  },
+  {
+    id: "ramen-1",
+    tags: ["ラーメン", "夜ごはん", "ごはん", "バイト後"],
+    lines: ["ラーメンを", "食べに行こうと", BLANK, "言えるくらいの", "夜でよかった"],
+    choices: ["湯気", "にんにく", "空腹", "安心"],
+  },
+  {
+    id: "snack-1",
+    tags: ["まだ食べる", "ごはん", "カフェ", "寄り道"],
+    lines: ["まだ食べる", "言い訳みたいに", BLANK, "帰りたくない", "顔をしている"],
+    choices: ["デザート", "本音", "別腹", "寄り道"],
+  },
+  {
+    id: "way-1",
+    tags: ["帰り道", "帰り", "道", "駅"],
+    lines: ["帰り道", "改札前で", BLANK, "さよならだけが", "少し遅れる"],
+    choices: ["夕焼け", "沈黙", "コンビニ", "足音"],
+  },
+  {
+    id: "way-2",
+    tags: ["あとで話そ", "話そ", "帰り", "道"],
+    lines: ["あとで話そ", "軽く言ったら", BLANK, "帰り道だけ", "少し長くて"],
+    choices: ["続き", "本音", "約束", "くだらなさ"],
+  },
+  {
+    id: "way-3",
+    tags: ["駅まで", "帰り道", "駅", "また話そ"],
+    lines: ["駅までの", "短い距離に", BLANK, "言えないことが", "まだ残ってる"],
+    choices: ["信号", "続き", "沈黙", "足音"],
+  },
+  {
+    id: "baito-1",
+    tags: ["バイト後", "バイト", "終わった", "夜ごはん"],
+    lines: ["バイト後の", "眠い顔でも", BLANK, "会えたら少し", "夜がほどける"],
+    choices: ["まかない", "おつかれ", "湯気", "本音"],
+  },
+  {
+    id: "class-after-1",
+    tags: ["授業後", "授業", "空きコマ", "眠すぎる"],
+    lines: ["授業後に", "話すつもりの", BLANK, "ノートの端で", "丸くなってる"],
+    choices: ["続き", "眠気", "課題", "ため息"],
+  },
+  {
+    id: "sleepy-1",
+    tags: ["眠すぎる", "眠", "ねむ", "授業後"],
+    lines: ["眠すぎる", "それでも少し", BLANK, "返事を待って", "画面がにじむ"],
+    choices: ["授業中", "帰り道", "甘いもの", "くだらなさ"],
+  },
+  {
+    id: "done-1",
+    tags: ["終わった", "バイト後", "授業後", "帰り道"],
+    lines: ["終わったと", "送るだけでは", BLANK, "足りない今日を", "少し持ってる"],
+    choices: ["おつかれ", "眠気", "報告", "余韻"],
+  },
+  {
+    id: "sorry-1",
+    tags: ["ごめん", "謝", "悪い", "仲直り"],
+    lines: ["ごめん", "言えばいいのに", BLANK, "遠回りして", "一首で送る"],
+    choices: ["照れくささ", "意地っ張り", "タイミング", "ほんとのこと"],
+  },
+  {
+    id: "sorry-2",
+    tags: ["ごめん", "仲直り", "言いすぎた", "気まずい"],
+    lines: ["言いすぎた", "あとの画面に", BLANK, "送れないまま", "夜がほどける"],
+    choices: ["既読", "反省", "チョコ", "ごめん"],
+  },
+  {
+    id: "sorry-3",
+    tags: ["気まずい", "ごめん", "言いすぎた", "関係"],
+    lines: ["気まずさを", "そのまま置くと", BLANK, "少し冷たく", "見えてしまって"],
+    choices: ["ごめん", "余白", "既読", "ためらい"],
+  },
+  {
+    id: "thanks-1",
+    tags: ["助かった", "ありがと", "ありがとう"],
+    lines: ["助かった", "ちゃんと言うには", BLANK, "照れが先きて", "一首にしたよ"],
+    choices: ["ありがとう", "照れ", "帰り道", "甘さ"],
+  },
+  {
+    id: "thanks-2",
+    tags: ["ありがとう", "助かった", "関係"],
+    lines: ["ありがとう", "短く打つには", BLANK, "今日のぶんだけ", "あたたかすぎて"],
+    choices: ["その一言", "照れくささ", "お守り", "本音"],
+  },
+  {
+    id: "over-1",
+    tags: ["言いすぎた", "ごめん", "関係", "ちょい相談"],
+    lines: ["言いすぎた", "気づいたあとで", BLANK, "言葉の角を", "丸めて送る"],
+    choices: ["ごめん", "反省", "照れ", "明日"],
+  },
+  {
+    id: "helped-1",
+    tags: ["助かった", "ありがとう", "ありがと", "バイト後"],
+    lines: ["助かった", "言えたらきっと", BLANK, "帰り道まで", "軽くなるのに"],
+    choices: ["ありがと", "本音", "照れ", "缶コーヒー"],
+  },
+  {
+    id: "meet-1",
+    tags: ["会いたい", "会う", "また", "話そ"],
+    lines: ["会いたいを", "軽く包んで", BLANK, "また話そって", "送る夜更け"],
+    choices: ["冗談", "本音", "月明かり", "通知"],
+  },
+  {
+    id: "meet-2",
+    tags: ["また", "話そ", "会いたい", "暇"],
+    lines: ["また話そ", "言いそびれてた", BLANK, "帰り道だけ", "少し長くて"],
+    choices: ["続き", "本音", "約束", "くだらなさ"],
+  },
+  {
+    id: "meet-3",
+    tags: ["会いたい", "ちょい寂しい", "なんか暇", "夜"],
+    lines: ["会いたいを", "そのまま出せず", BLANK, "なんか暇って", "遠回りする"],
+    choices: ["本音", "照れ", "通知", "夜風"],
+  },
+  {
+    id: "again-1",
+    tags: ["また話そ", "あとで話そ", "話したい", "帰り道"],
+    lines: ["また話そ", "終わった話の", BLANK, "端っこだけを", "まだ持っている"],
+    choices: ["続き", "余韻", "約束", "くだらなさ"],
+  },
+  {
+    id: "talk-1",
+    tags: ["話したい", "話す", "あとで"],
+    lines: ["話したい", "それだけ置いて", BLANK, "急がないまま", "返事を待った"],
+    choices: ["余白", "本音", "夜風", "通知"],
+  },
+  {
+    id: "talk-2",
+    tags: ["ちょい相談", "相談", "話したい", "聞いて"],
+    lines: ["ちょい相談", "重くしないで", BLANK, "机のすみへ", "そっと置きたい"],
+    choices: ["本音", "飴玉", "ためらい", "明日"],
+  },
+  {
+    id: "bored-1",
+    tags: ["暇", "なんか暇", "なんか", "だるい", "ちょい"],
+    lines: ["なんか暇", "言い訳みたいに", BLANK, "君の名前を", "探してしまう"],
+    choices: ["スクロール", "夕方", "プリン", "弱音"],
+  },
+  {
+    id: "lonely-1",
+    tags: ["ちょい寂しい", "寂しい", "なんか暇", "会いたい"],
+    lines: ["ちょい寂しい", "言い切るほどじゃ", BLANK, "ないから夜に", "少し残した"],
+    choices: ["本音", "月明かり", "通知", "遠回り"],
+  },
+  {
+    id: "group-who-1",
+    tags: ["誰来る", "誰", "来る", "グループ"],
+    lines: ["誰来るの", "聞いたつもりで", BLANK, "ほんとは少し", "君を探した"],
+    choices: ["名前", "既読", "本音", "集合場所"],
+  },
+  {
+    id: "group-vibe-1",
+    tags: ["ノリで行く", "ノリ", "グループ", "どこ行く"],
+    lines: ["ノリで行く", "そう言いながら", BLANK, "誰かの本音も", "ちゃんと乗せてる"],
+    choices: ["勢い", "空気", "多数決", "やさしさ"],
+  },
+  {
+    id: "group-cant-1",
+    tags: ["決められない", "決まらない", "グループ", "どっちにする"],
+    lines: ["決められない", "時間ばかりが", BLANK, "増えてくほどに", "楽しくなってる"],
+    choices: ["候補", "脱線", "笑い", "優柔不断"],
+  },
+  {
+    id: "group-time-1",
+    tags: ["何時集合", "集合時間", "グループ", "遅刻"],
+    lines: ["何時集合", "聞いた瞬間", BLANK, "遅れる人まで", "思い浮かんだ"],
+    choices: ["既読", "笑い", "五分前", "予感"],
+  },
+  {
+    id: "group-decide-1",
+    tags: ["予定決めよ", "今日どうする", "明日どうする", "グループ"],
+    lines: ["予定決めよ", "言った誰かの", BLANK, "ひとことでまた", "部屋が動いた"],
+    choices: ["本気", "ノリ", "号令", "眠気"],
+  },
+  {
+    id: "plan-ashita-3",
+    tags: ["明日どうする", "明日", "予定", "集合時間"],
+    lines: ["明日どうする", "決めたそばから", BLANK, "天気のことを", "誰かが言った"],
+    choices: ["迷ってる", "傘いるかも", "早めに行く", "ノリ"],
+  },
+  {
+    id: "plan-today-3",
+    tags: ["今日どうする", "今日", "どこ行く", "予定"],
+    lines: ["今日どうする", "予定の前に", BLANK, "なんでもない話", "先に始まる"],
+    choices: ["歩きたい", "決めきれない", "駅前", "笑ってしまう"],
+  },
+  {
+    id: "plan-where-3",
+    tags: ["どこ行く", "予定", "寄り道", "今日どうする"],
+    lines: ["どこ行くか", "地図より先に", BLANK, "足の向くほう", "少し信じる"],
+    choices: ["歩きたい", "迷ってる", "コンビニ", "任せたい"],
+  },
+  {
+    id: "plan-time-3",
+    tags: ["集合時間", "何時集合", "時間", "予定"],
+    lines: ["集合時間", "決める画面で", BLANK, "誰かの既読が", "ゆっくり増える"],
+    choices: ["待っている", "たぶん遅れる", "五分前", "笑って許す"],
+  },
+  {
+    id: "food-night-3",
+    tags: ["夜ごはん", "夜", "ごはん", "帰り道"],
+    lines: ["夜ごはん", "どこでもいいよと", BLANK, "言ったあとから", "駅が遠のく"],
+    choices: ["まだいたい", "帰りたくない", "ラーメン", "少し歩く"],
+  },
+  {
+    id: "food-ramen-2",
+    tags: ["ラーメン", "夜ごはん", "バイト後", "ごはん"],
+    lines: ["ラーメンの", "湯気を理由に", BLANK, "今日の話を", "少し伸ばした"],
+    choices: ["話したい", "替え玉する", "黙っている", "お腹すいた"],
+  },
+  {
+    id: "food-cafe-3",
+    tags: ["カフェ行こ", "カフェ", "空きコマ", "話したい"],
+    lines: ["カフェ行こ", "課題のふりで", BLANK, "甘いものより", "話したいこと"],
+    choices: ["誘ってみる", "迷ってる", "少しだけ", "課題のこと"],
+  },
+  {
+    id: "food-more-2",
+    tags: ["まだ食べる", "何食べる", "夜ごはん", "ごはん"],
+    lines: ["まだ食べる", "そのひとことで", BLANK, "帰る理由が", "ひとつ減ってく"],
+    choices: ["帰りたくない", "デザート", "まだいたい", "笑ってしまう"],
+  },
+  {
+    id: "feeling-meet-4",
+    tags: ["会いたい", "また話そ", "ちょい寂しい"],
+    lines: ["会いたいと", "言うほどでもない", BLANK, "でも通知だけ", "少し待ってる"],
+    choices: ["気がしてる", "言えなくて", "夜のこと", "帰り道"],
+  },
+  {
+    id: "feeling-talk-3",
+    tags: ["話したい", "また話そ", "あとで話そ"],
+    lines: ["話したい", "用件だけなら", BLANK, "もう終わってる", "はずだったのに"],
+    choices: ["まだ話したい", "言えなかった", "くだらないこと", "待っている"],
+  },
+  {
+    id: "feeling-bored-2",
+    tags: ["なんか暇", "暇", "会いたい"],
+    lines: ["なんか暇", "送る直前", BLANK, "ほんとの名前を", "そっと隠した"],
+    choices: ["連絡したい", "だらだらする", "会いたい", "プリン"],
+  },
+  {
+    id: "feeling-lonely-2",
+    tags: ["ちょい寂しい", "寂しい", "夜", "また話そ"],
+    lines: ["ちょい寂しい", "大げさにせず", BLANK, "画面の端に", "置いてみただけ"],
+    choices: ["気づいてほしい", "言えなくて", "月曜日", "なんとなく続く"],
+  },
+  {
+    id: "relation-sorry-4",
+    tags: ["ごめん", "気まずい", "言いすぎた"],
+    lines: ["ごめんねを", "言えばいいのに", BLANK, "遠回りして", "一首で送る"],
+    choices: ["言えなかった", "意地を張る", "まだ迷う", "タイミング"],
+  },
+  {
+    id: "relation-thanks-3",
+    tags: ["ありがとう", "助かった", "ありがと"],
+    lines: ["ありがとう", "軽く押したら", BLANK, "軽すぎる気が", "してしまうから"],
+    choices: ["ちゃんと言いたい", "照れてしまう", "助かった", "残しておく"],
+  },
+  {
+    id: "relation-awkward-2",
+    tags: ["気まずい", "ごめん", "言いすぎた"],
+    lines: ["気まずいね", "言えたらたぶん", BLANK, "笑えるくらいに", "戻れるのかな"],
+    choices: ["言い直したい", "まだ迷う", "既読", "近づきたい"],
+  },
+  {
+    id: "relation-helped-2",
+    tags: ["助かった", "ありがとう", "バイト後"],
+    lines: ["助かった", "それだけ送る", BLANK, "ほんとはもっと", "救われていた"],
+    choices: ["ちゃんと言う", "照れてしまう", "おつかれ", "少し泣ける"],
+  },
+  {
+    id: "daily-way-4",
+    tags: ["帰り道", "駅まで", "また話そ"],
+    lines: ["帰り道", "改札前で", BLANK, "さよならだけが", "少し遅れる"],
+    choices: ["待っている", "言えなかった", "まだいたい", "コンビニ"],
+  },
+  {
+    id: "daily-class-2",
+    tags: ["授業後", "空きコマ", "眠すぎる"],
+    lines: ["授業後の", "ざわざわしたまま", BLANK, "聞きたいことが", "鞄に残る"],
+    choices: ["話したい", "眠すぎる", "聞けなかった", "ノート"],
+  },
+  {
+    id: "daily-baito-2",
+    tags: ["バイト後", "終わった", "夜ごはん"],
+    lines: ["バイト後に", "おつかれだけじゃ", BLANK, "足りない夜を", "少し歩いた"],
+    choices: ["話したい", "もう眠い", "ラーメン", "待っている"],
+  },
+  {
+    id: "daily-sleepy-2",
+    tags: ["眠すぎる", "授業後", "帰り道"],
+    lines: ["眠すぎる", "なのに返事を", BLANK, "待ってる自分に", "少し笑った"],
+    choices: ["待っている", "寝落ちする", "言えなかった", "甘いもの"],
+  },
+  {
+    id: "group-who-2",
+    tags: ["誰来る", "グループ", "集合時間"],
+    lines: ["誰来るの", "聞いてるふりで", BLANK, "来てほしい人", "ひとり浮かべる"],
+    choices: ["君を探す", "名前を待つ", "みんな", "言えなくて"],
+  },
+  {
+    id: "group-vibe-2",
+    tags: ["ノリで行く", "グループ", "どこ行く"],
+    lines: ["ノリで行く", "その一言に", BLANK, "地図にないほう", "選ばれていく"],
+    choices: ["歩きたい", "なんとなく行く", "勢い", "笑ってしまう"],
+  },
+  {
+    id: "group-cant-2",
+    tags: ["決められない", "どっちにする", "グループ"],
+    lines: ["決められない", "ままの時間が", BLANK, "なぜかいちばん", "グループらしい"],
+    choices: ["空気で決まる", "脱線する", "多数決", "まだ迷う"],
+  },
+  {
+    id: "group-time-2",
+    tags: ["何時集合", "集合時間", "グループ"],
+    lines: ["何時集合", "言ったそばから", BLANK, "遅刻の未来", "少し笑える"],
+    choices: ["たぶん遅れる", "待っている", "五分前", "笑って許す"],
+  },
+  {
+    id: "default-1",
+    tags: [],
+    lines: ["{{topic}}", "うまく言えずに", BLANK, "湯気の向こうで", "君を見ている"],
+    choices: ["本音", "眠気", "余白", "小さな嘘"],
+  },
+  {
+    id: "default-2",
+    tags: [],
+    lines: ["{{topic}}を", "丸めてそっと", BLANK, "言葉の端が", "少し甘くなる"],
+    choices: ["ポケット", "沈黙", "カプセル", "遠回り"],
+  },
+];
+
+clearLegacyHistory();
+
+const roomChannel = "BroadcastChannel" in window ? new BroadcastChannel(PREVIEW_MODE ? "potonchu-preview-room-sync-v3" : "potonchu-room-sync-v3") : null;
+const backend = {
+  mode: "demo",
+  ready: false,
+  status: PREVIEW_MODE ? "Googleログインなしで、お試しの名前ではじめられます。" : "Firebase未設定です。同じPCの別タブだけで試せます。",
+  firebase: null,
+  roomUnsubscribe: null,
+  messageUnsubscribes: new Map(),
+  messageErrors: new Map(),
+  pendingReactions: new Map(),
+  reactionErrors: new Map(),
+  talkUnsubscribe: null,
+  talkSubscriptionKey: "",
+  talkStatus: new Map(),
+  talkSending: new Set(),
+  seenMemberIds: new Map(),
+  notificationStatus: "通知はまだ設定されていません。",
+  notificationToken: "",
+  serviceWorkerRegistration: null,
+};
+if (hasFirebaseConfig()) backend.status = "Firebaseへ接続中です。";
+let demoState = createSharedState();
+
+const roomStore = {
+  load() {
+    return demoState;
+  },
+  save(data, shouldBroadcast = true) {
+    const next = normalizeSharedState({ ...data, updatedAt: Date.now() });
+    demoState = next;
+    if (shouldBroadcast) roomChannel?.postMessage({ type: "demo-state-updated", state: next });
+    return next;
+  },
+  update(updater) {
+    const current = this.load();
+    const result = updater(current) || current;
+    return this.save(result);
+  },
+};
+
+let sharedState = roomStore.load();
+let appState = createAppState();
+let ui = {
+  view: appState.user ? "home" : "login",
+  topic: "",
+  composer: null,
+  createResultId: null,
+  openReactionFor: "",
+  reactionPulse: null,
+  talkMessageId: "",
+  talkDrafts: new Map(),
+  talkComposing: false,
+  talkRenderPending: false,
+  pendingPhoto: "",
+  firebaseNoticeDismissed: false,
+  pendingInviteRoomId: new URLSearchParams(window.location.search).get("roomId"),
+  pendingInviteName: new URLSearchParams(window.location.search).get("roomName"),
+  pendingInviteType: new URLSearchParams(window.location.search).get("roomType"),
+};
+
+roomChannel?.postMessage({ type: "request-demo-state" });
+
+function createSharedState() {
+  return {
+    users: [],
+    rooms: [],
+    favorites: {},
+    talks: {},
+    updatedAt: Date.now(),
+  };
+}
+
+function createAppState() {
+  const user = loadSessionUser();
+  return {
+    user,
+    rooms: sharedState.rooms,
+    favorite: user ? sharedState.favorites?.[user.id] || null : null,
+    activeRoomId: sessionStorage.getItem(ACTIVE_ROOM_KEY) || null,
+  };
+}
+
+function normalizeSharedState(data) {
+  const empty = createSharedState();
+  return {
+    ...empty,
+    ...data,
+    users: Array.isArray(data?.users) ? data.users.map(normalizeUser) : [],
+    rooms: Array.isArray(data?.rooms) ? data.rooms.map(normalizeRoom) : [],
+    favorites: data?.favorites && typeof data.favorites === "object" ? data.favorites : {},
+    talks: Object.fromEntries(Object.entries(data?.talks || {}).map(([key, replies]) => [key, Array.isArray(replies) ? replies.map(normalizeTalkReply) : []])),
+    updatedAt: Number(data?.updatedAt) || Date.now(),
+  };
+}
+
+function normalizeRoom(room) {
+  return {
+    id: room.id || makeId("room"),
+    name: room.name || "名前のないルーム",
+    type: room.type === "group" ? "group" : "pair",
+    createdBy: room.createdBy || room.members?.[0]?.id || "",
+    inviteCode: room.inviteCode || room.id || makeId("invite"),
+    members: Array.isArray(room.members) ? room.members.map(normalizeUser) : [],
+    messages: Array.isArray(room.messages) ? room.messages.map(normalizeMessage) : [],
+    createdAt: room.createdAt || Date.now(),
+  };
+}
+
+function normalizeMessage(message) {
+  const author = normalizeUser(message.author || {
+    id: message.senderId,
+    name: message.senderName,
+    icon: message.senderPhoto || message.senderIcon,
+    photoURL: message.senderPhoto,
+  });
+  return {
+    id: message.id || message.messageId || makeId("msg"),
+    roomId: message.roomId || "",
+    topic: message.topic || "お題",
+    lines: Array.isArray(message.lines) ? message.lines : Array.isArray(message.poemLines) ? message.poemLines : [],
+    selectedWord: message.selectedWord || "",
+    clientId: message.clientId || "",
+    status: message.status || "",
+    author,
+    senderId: message.senderId || author.id,
+    senderName: message.senderName || author.name,
+    senderPhoto: message.senderPhoto || author.icon,
+    reactions: normalizeReactions(message.reactions),
+    createdAt: toMillis(message.createdAt) || message.createdAtMillis || Date.now(),
+  };
+}
+
+function normalizeUser(user) {
+  const photoURL = user?.photoURL || (isImageValue(user?.icon) ? user.icon : "");
+  const customIconURL = user?.customIconURL || "";
+  return {
+    id: user?.id || user?.uid || makeId("user"),
+    name: user?.name || user?.displayName || "ぽとん",
+    icon: user?.icon && !isImageValue(user.icon) ? user.icon : "ぽ",
+    photoURL,
+    customIconURL,
+    provider: user?.provider || "google-mock",
+    createdAt: user?.createdAt || Date.now(),
+  };
+}
+
+function normalizeTalkReply(reply) {
+  return {
+    id: reply.id || makeId("reply"),
+    text: typeof reply.text === "string" ? reply.text : "",
+    author: normalizeUser(reply.author || { id: reply.senderId, name: reply.senderName, photoURL: reply.senderPhoto }),
+    createdAt: toMillis(reply.createdAt) || reply.createdAtMillis || Date.now(),
+    status: reply.status || "",
+  };
+}
+
+function normalizeReactions(reactions) {
+  if (!reactions || typeof reactions !== "object") return {};
+  return Object.fromEntries(
+    Object.entries(reactions).map(([key, users]) => [key, Array.isArray(users) ? [...new Set(users)] : []]),
+  );
+}
+
+function clearLegacyHistory() {
+  try {
+    if (localStorage.getItem(HISTORY_RESET_KEY) === "done") return;
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
+    localStorage.removeItem(SHARED_STORAGE_KEY);
+    sessionStorage.removeItem(ACTIVE_ROOM_KEY);
+    localStorage.setItem(HISTORY_RESET_KEY, "done");
+  } catch (error) {
+    // 保存を使えないブラウザでも画面はそのまま動かします。
+  }
+}
+
+function loadSessionUser() {
+  try {
+    const raw = sessionStorage.getItem(SESSION_USER_KEY);
+    return raw ? normalizeUser(JSON.parse(raw)) : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function saveSessionUser(user) {
+  sessionStorage.setItem(SESSION_USER_KEY, JSON.stringify(normalizeUser(user)));
+}
+
+function clearSessionUser() {
+  sessionStorage.removeItem(SESSION_USER_KEY);
+}
+
+function getFirebaseConfig() {
+  if (PREVIEW_MODE) return {};
+  if (["127.0.0.1", "localhost"].includes(window.location.hostname)
+    && new URLSearchParams(window.location.search).get("demo") === "1") return {};
+  return window.POTONCHU_FIREBASE_CONFIG || {};
+}
+
+function hasFirebaseConfig() {
+  const config = getFirebaseConfig();
+  return Boolean(config.apiKey && config.authDomain && config.projectId && config.appId);
+}
+
+function isFirebaseMode() {
+  return backend.mode === "firebase" && backend.firebase?.db;
+}
+
+async function initBackend() {
+  if (!hasFirebaseConfig()) {
+    backend.ready = true;
+    render();
+    return;
+  }
+
+  try {
+    const [appModule, authModule, firestoreModule] = await Promise.all([
+      import(`https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}/firebase-app.js`),
+      import(`https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}/firebase-auth.js`),
+      import(`https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}/firebase-firestore.js`),
+    ]);
+
+    const firebaseApp = appModule.initializeApp(getFirebaseConfig());
+    const auth = authModule.getAuth(firebaseApp);
+    const db = firestoreModule.getFirestore(firebaseApp);
+    const messagingModule = await loadFirebaseMessagingModule();
+    const messaging = messagingModule ? messagingModule.getMessaging(firebaseApp) : null;
+    backend.mode = "firebase";
+    backend.ready = true;
+    backend.status = "Firebaseでリアルタイム同期します。";
+    backend.notificationStatus = messaging ? "スマホ通知を使うには、この端末で通知を許可してください。" : "このブラウザでは通知を使えない可能性があります。";
+    backend.firebase = { appModule, authModule, firestoreModule, messagingModule, app: firebaseApp, auth, db, messaging };
+    setupForegroundNotifications();
+
+    authModule.onAuthStateChanged(auth, async (firebaseUser) => {
+      if (!firebaseUser) {
+        clearSessionUser();
+        sharedState = createSharedState();
+        cleanupFirebaseSubscriptions();
+        if (!["login", "setup"].includes(ui.view)) ui.view = "login";
+        render();
+        return;
+      }
+
+      const user = await loadFirebaseUser(firebaseUser);
+      saveSessionUser(user);
+      upsertLocalUser(user);
+      if (user.favoritePoem) {
+        sharedState = normalizeSharedState({
+          ...sharedState,
+          favorites: { ...sharedState.favorites, [user.id]: user.favoritePoem },
+        });
+      }
+      subscribeFirebaseRooms(user.id);
+      await routeAfterAuth();
+    });
+
+    render();
+  } catch (error) {
+    backend.ready = true;
+    backend.mode = "demo";
+    backend.status = "Firebaseの読み込みに失敗しました。設定を確認してください。";
+    render();
+  }
+}
+
+async function loadFirebaseMessagingModule() {
+  if (!canUseBrowserNotifications()) return null;
+  try {
+    return await import(`https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}/firebase-messaging.js`);
+  } catch (error) {
+    return null;
+  }
+}
+
+function canUseBrowserNotifications() {
+  return "Notification" in window && "serviceWorker" in navigator;
+}
+
+async function signInWithFirebase() {
+  if (!isFirebaseMode()) return false;
+  try {
+    const { authModule, auth } = backend.firebase;
+    const provider = new authModule.GoogleAuthProvider();
+    await authModule.signInWithPopup(auth, provider);
+    return true;
+  } catch (error) {
+    showToast("Googleログインを完了できませんでした。");
+    return false;
+  }
+}
+
+async function signOutCurrentUser() {
+  if (isFirebaseMode()) {
+    await backend.firebase.authModule.signOut(backend.firebase.auth);
+  }
+  clearSessionUser();
+  sessionStorage.removeItem(ACTIVE_ROOM_KEY);
+  cleanupFirebaseSubscriptions();
+}
+
+async function loadFirebaseUser(firebaseUser) {
+  const { firestoreModule, db } = backend.firebase;
+  const userRef = firestoreModule.doc(db, "users", firebaseUser.uid);
+  const snapshot = await firestoreModule.getDoc(userRef);
+  const saved = snapshot.exists() ? snapshot.data() : {};
+  const user = normalizeUser({
+    id: firebaseUser.uid,
+    name: saved.displayName || firebaseUser.displayName || "ぽとん",
+    icon: "ぽ",
+    photoURL: saved.photoURL || firebaseUser.photoURL || "",
+    customIconURL: saved.customIconURL || "",
+    provider: "firebase",
+    createdAt: toMillis(saved.createdAt) || Date.now(),
+  });
+  user.favoritePoem = saved.favoritePoem || null;
+  await firestoreModule.setDoc(
+    userRef,
+    {
+      displayName: user.name,
+      photoURL: user.photoURL || "",
+      customIconURL: user.customIconURL || "",
+      updatedAt: firestoreModule.serverTimestamp(),
+    },
+    { merge: true },
+  );
+  return user;
+}
+
+function cleanupFirebaseSubscriptions() {
+  backend.roomUnsubscribe?.();
+  backend.roomUnsubscribe = null;
+  backend.messageUnsubscribes.forEach((unsubscribe) => unsubscribe());
+  backend.messageUnsubscribes.clear();
+  backend.seenMemberIds.clear();
+  backend.pendingReactions.clear();
+  backend.reactionErrors.clear();
+  stopTalkSubscription();
+  backend.talkStatus.clear();
+  backend.talkSending.clear();
+  ui.talkDrafts.clear();
+  aiPoemQueues.clear();
+}
+
+function subscribeFirebaseRooms(userId) {
+  if (!isFirebaseMode()) return;
+  const { firestoreModule, db } = backend.firebase;
+  backend.roomUnsubscribe?.();
+  const roomsQuery = firestoreModule.query(
+    firestoreModule.collection(db, "rooms"),
+    firestoreModule.where("memberIds", "array-contains", userId),
+  );
+  backend.roomUnsubscribe = firestoreModule.onSnapshot(
+    roomsQuery,
+    (snapshot) => {
+      const nextRooms = snapshot.docs.map((roomDoc) => normalizeFirebaseRoom(roomDoc));
+      sharedState = normalizeSharedState({
+        ...sharedState,
+        rooms: nextRooms.map((room) => {
+          const existing = sharedState.rooms.find((item) => item.id === room.id);
+          return { ...room, messages: existing?.messages || [] };
+        }),
+      });
+      watchRoomMemberChanges(nextRooms);
+      nextRooms.forEach((room) => subscribeFirebaseMessages(room.id));
+      render();
+    },
+    (error) => {
+      backend.status = "ルームを読み込めません。Firebaseのルールを確認してください。";
+      showToast("ルームを読み込めませんでした。");
+      render();
+    },
+  );
+}
+
+function subscribeFirebaseMessages(roomId) {
+  if (!isFirebaseMode() || backend.messageUnsubscribes.has(roomId)) return;
+  const { firestoreModule, db } = backend.firebase;
+  const messagesQuery = firestoreModule.collection(db, "rooms", roomId, "messages");
+  const unsubscribe = firestoreModule.onSnapshot(
+    messagesQuery,
+    (snapshot) => {
+      backend.messageErrors.delete(roomId);
+      const messages = snapshot.docs
+        .map((messageDoc) => normalizeFirebaseMessage(roomId, messageDoc))
+        .map((message) => overlayPendingReactions(roomId, message))
+        .sort((a, b) => a.createdAt - b.createdAt);
+      const existingRoom = sharedState.rooms.find((room) => room.id === roomId);
+      const pendingMessages = (existingRoom?.messages || []).filter(
+        (message) => message.status === "sending" && !messages.some((item) => item.clientId && item.clientId === message.clientId),
+      );
+      sharedState = normalizeSharedState({
+        ...sharedState,
+        rooms: sharedState.rooms.map((room) =>
+          room.id === roomId ? { ...room, messages: [...messages, ...pendingMessages].sort((a, b) => a.createdAt - b.createdAt) } : room,
+        ),
+      });
+      if (["home", "chat", "talk"].includes(ui.view)) render();
+    },
+    (error) => {
+      backend.messageErrors.set(roomId, error.code || error.message || "unknown");
+      showToast("一首を読み込めません。");
+      render();
+    },
+  );
+  backend.messageUnsubscribes.set(roomId, unsubscribe);
+}
+
+function normalizeFirebaseRoom(roomDoc) {
+  const data = roomDoc.data();
+  return normalizeRoom({
+    id: roomDoc.id,
+    name: data.roomName || data.name,
+    type: data.type,
+    createdBy: data.createdBy,
+    inviteCode: data.inviteCode || roomDoc.id,
+    members: Array.isArray(data.members) ? data.members : [],
+    messages: [],
+    createdAt: toMillis(data.createdAt) || data.createdAtMillis,
+  });
+}
+
+function normalizeFirebaseMessage(roomId, messageDoc) {
+  const data = messageDoc.data();
+  return normalizeMessage({
+    id: messageDoc.id,
+    roomId,
+    topic: data.topic,
+    lines: data.poemLines,
+    poemLines: data.poemLines,
+    selectedWord: data.selectedWord,
+    clientId: data.clientId,
+    senderId: data.senderId,
+    senderName: data.senderName,
+    senderPhoto: data.senderPhoto,
+    author: {
+      id: data.senderId,
+      name: data.senderName,
+      photoURL: data.senderPhoto,
+      customIconURL: data.senderPhoto,
+    },
+    reactions: data.reactions || {},
+    createdAt: toMillis(data.createdAt) || data.createdAtMillis,
+  });
+}
+
+function watchRoomMemberChanges(rooms) {
+  rooms.forEach((room) => {
+    const previous = backend.seenMemberIds.get(room.id) || new Set();
+    const current = new Set(room.members.map((member) => member.id));
+    const joined = room.members.find((member) => !previous.has(member.id) && member.id !== appState.user?.id);
+    backend.seenMemberIds.set(room.id, current);
+    if (joined && room.id === appState.activeRoomId && ui.view === "chat") showToast(`${joined.name}が入りました`);
+  });
+}
+
+function render() {
+  if (ui.view === "talk" && ui.talkComposing) {
+    ui.talkRenderPending = true;
+    return;
+  }
+  const focusedReply = document.activeElement?.id === "talkReplyInput" ? document.activeElement : null;
+  const replySelection = focusedReply ? [focusedReply.selectionStart, focusedReply.selectionEnd] : null;
+  const oldTalkList = ui.view === "talk" ? document.querySelector(".talk-replies") : null;
+  const talkScroll = oldTalkList ? { key: oldTalkList.dataset.talkKey, top: oldTalkList.scrollTop,
+    atEnd: oldTalkList.scrollHeight - oldTalkList.scrollTop - oldTalkList.clientHeight < 48 } : null;
+  refreshAppState();
+
+  if (!appState.user && !["login", "setup"].includes(ui.view)) {
+    ui.view = "login";
+  }
+
+  if (ui.view === "login") app.innerHTML = renderLogin();
+  if (ui.view === "setup") app.innerHTML = renderSetup();
+  if (ui.view === "home") app.innerHTML = renderHome();
+  if (ui.view === "create-room") app.innerHTML = renderCreateRoom();
+  if (ui.view === "chat") app.innerHTML = renderChat();
+  if (ui.view === "talk") app.innerHTML = renderTalk();
+  if (ui.view === "topic") app.innerHTML = renderTopic();
+  if (ui.view === "gacha") app.innerHTML = renderGacha();
+
+  const topicInput = document.querySelector("#topicInput");
+  if (topicInput) {
+    topicInput.focus();
+    updateTopicCounter();
+  }
+  if (replySelection && ui.view === "talk") {
+    const input = document.querySelector("#talkReplyInput");
+    input?.focus({ preventScroll: true });
+    input?.setSelectionRange(...replySelection);
+  }
+  if (ui.view === "talk") {
+    const list = document.querySelector(".talk-replies");
+    if (list) list.scrollTop = !talkScroll || talkScroll.key !== list.dataset.talkKey || talkScroll.atEnd || ui.scrollTalkToEnd ? list.scrollHeight : talkScroll.top;
+    ui.scrollTalkToEnd = false;
+  }
+}
+
+function refreshAppState() {
+  if (backend.mode !== "firebase") sharedState = roomStore.load();
+  const user = loadSessionUser();
+  appState = {
+    user,
+    rooms: sharedState.rooms,
+    favorite: user ? sharedState.favorites?.[user.id] || null : null,
+    activeRoomId: sessionStorage.getItem(ACTIVE_ROOM_KEY) || appState?.activeRoomId || null,
+  };
+}
+
+function handleSharedUpdate() {
+  refreshAppState();
+  if (["home", "chat", "talk"].includes(ui.view)) render();
+}
+
+roomChannel?.addEventListener("message", (event) => {
+  if (backend.mode === "firebase") return;
+  if (event.data?.type === "request-demo-state" && demoState.rooms.length) {
+    roomChannel.postMessage({ type: "demo-state-updated", state: demoState });
+  }
+  if (event.data?.type === "demo-state-updated" && event.data.state) {
+    demoState = normalizeSharedState(event.data.state);
+    watchRoomMemberChanges(demoState.rooms);
+    handleSharedUpdate();
+  }
+});
+
+function renderLogin() {
+  const inviteNote = ui.pendingInviteRoomId ? "<p class=\"small-note\">招待リンクを開いています。ログイン後にそのルームへ入ります。</p>" : "";
+  return `
+    <section class="screen login-screen">
+      <div class="auth-panel">
+        <div class="brand-lockup">
+          <div class="brand-mark">ぽ</div>
+          <div>
+            <h1 class="brand-title">ぽとんちゅ</h1>
+            <p class="brand-subcopy">一首しか送れないチャット。</p>
+          </div>
+        </div>
+        <p class="login-copy">話したいことを10字で置いて、ことばを選んで、友達にぽとんと送る。一首から、会話がはじまる。</p>
+        <button type="button" class="google-button" data-action="google-login">
+          <span class="google-dot" aria-hidden="true">${PREVIEW_MODE ? "ぽ" : "G"}</span>
+          ${PREVIEW_MODE ? "プレビューをはじめる" : "Googleでログイン"}
+        </button>
+        <p class="small-note">${escapeHtml(backend.status)}</p>
+        ${inviteNote}
+      </div>
+    </section>
+  `;
+}
+
+function renderSetup() {
+  return `
+    <section class="screen setup-screen">
+      <div class="setup-panel">
+        <div class="page-title">
+          <p class="eyebrow">account</p>
+          <h1 class="brand-title">${PREVIEW_MODE ? "プレビューの準備" : "アカウント作成"}</h1>
+          <p class="brand-subcopy">${PREVIEW_MODE ? "お試しの名前とアイコンを決めます。" : "友達に見える名前とアイコンを決めます。"}</p>
+        </div>
+        <form class="setup-form" data-form="setup">
+          <label class="field-label">
+            ユーザー名
+            <input id="setupName" name="name" maxlength="12" value="ぽとん" autocomplete="off" />
+          </label>
+          <div class="field-label">
+            アイコン
+            <div class="icon-grid">
+              ${iconChoices
+                .map(
+                  (icon, index) => `
+                    <label class="icon-choice">
+                      <input type="radio" name="icon" value="${escapeAttribute(icon)}" ${index === 0 ? "checked" : ""} />
+                      <span class="icon-face">${escapeHtml(icon)}</span>
+                    </label>
+                  `,
+                )
+                .join("")}
+            </div>
+          </div>
+          <button type="submit" class="primary-button">マイページへ</button>
+        </form>
+      </div>
+    </section>
+  `;
+}
+
+function renderHome() {
+  return `
+    <section class="screen">
+      ${renderTopbar(`
+        <button type="button" class="create-button" data-action="go-create-room">新しいルームを作る</button>
+        <button type="button" class="ghost-button" data-action="logout">ログアウト</button>
+      `)}
+      <div class="home-grid">
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">rooms</p>
+              <h2>参加中のチャットルーム</h2>
+            </div>
+          </div>
+          ${renderRoomList()}
+        </section>
+        <aside class="panel">
+          ${renderProfileCard()}
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">favorite</p>
+              <h2>お気に入りの一首</h2>
+            </div>
+          </div>
+          ${renderFavorite()}
+        </aside>
+      </div>
+    </section>
+  `;
+}
+
+function renderTopbar(actions = "") {
+  const user = appState.user;
+  return `
+    <header class="app-topbar">
+      <div class="brand-lockup">
+        <div class="brand-mark">ぽ</div>
+        <div>
+          <p class="eyebrow">potonchu</p>
+          <h1 class="brand-title">ぽとんちゅ</h1>
+        </div>
+      </div>
+      <div class="top-actions">
+        <div class="account-chip">
+          ${renderAvatar(user)}
+          <span class="account-name">${escapeHtml(user.name)}</span>
+        </div>
+        ${actions}
+      </div>
+    </header>
+  `;
+}
+
+function renderProfileCard() {
+  const user = appState.user;
+  const previewUser = ui.pendingPhoto ? { ...user, customIconURL: ui.pendingPhoto } : user;
+  return `
+    <div class="profile-card">
+      <div>
+        <p class="eyebrow">profile</p>
+        <h2>プロフィール写真</h2>
+      </div>
+      <div class="profile-photo-row">
+        ${renderAvatar(previewUser, "avatar profile-avatar")}
+        <div class="profile-photo-actions">
+          <input class="visually-hidden-file" id="profilePhotoInput" type="file" accept="image/*" />
+          <button type="button" class="copy-button" data-action="choose-profile-photo">写真をえらぶ</button>
+          ${ui.pendingPhoto ? `<button type="button" class="primary-button" data-action="save-profile-photo">この写真にする</button>` : ""}
+        </div>
+      </div>
+      <p class="small-note">写真は丸いアイコンとして表示されます。</p>
+      <div class="notification-box">
+        <div>
+          <p class="eyebrow">notification</p>
+          <h3>スマホ通知</h3>
+          <p class="small-note">${escapeHtml(backend.notificationStatus)}</p>
+        </div>
+        <button type="button" class="copy-button" data-action="enable-notifications">通知を受け取る</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderRoomList() {
+  if (appState.rooms.length === 0) {
+    return `
+      <div class="empty-state">
+        <p>まだルームがありません。</p>
+        <button type="button" class="primary-button" data-action="go-create-room">最初のルームを作る</button>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="room-list">
+      ${appState.rooms
+        .slice()
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .map(
+          (room) => `
+            <button type="button" class="room-item" data-action="open-room" data-room-id="${escapeAttribute(room.id)}">
+              <span>
+                <strong>${escapeHtml(room.name)}</strong>
+                <span class="room-meta">${room.type === "group" ? "グループ" : "1対1"} ・ ${room.members.length}人 ・ ${room.messages.length}首 ・ ${formatDate(room.createdAt)}</span>
+              </span>
+              <span class="room-kind">${getYesterdayReflection(room) ? "昨日のぽとん" : room.type === "group" ? "グループ" : "1対1"}</span>
+            </button>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderFavorite() {
+  const favorite = appState.favorite;
+  if (!favorite) {
+    return `
+      <div class="favorite-box">
+        <p class="favorite-empty">今の気持ちに残しておく一首を、1つだけ。</p>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="favorite-box">
+      <div class="favorite-meta">${escapeHtml(favorite.roomName)} ・ ${escapeHtml(favorite.topic)}</div>
+      ${renderPoemLines(favorite.lines)}
+      <div class="favorite-meta">${formatDate(favorite.savedAt)}に保存</div>
+    </div>
+  `;
+}
+
+function renderCreateRoom() {
+  const createdRoom = ui.createResultId ? findRoom(ui.createResultId) : null;
+  return `
+    <section class="screen room-create-screen">
+      ${renderTopbar(`<button type="button" class="back-button" data-action="go-home">マイページへ</button>`)}
+      <div class="panel">
+        <div class="page-title">
+          <p class="eyebrow">new room</p>
+          <h1>ルーム作成</h1>
+        </div>
+        <form class="room-form" data-form="room">
+          <label class="field-label">
+            ルーム名
+            <input name="roomName" maxlength="24" placeholder="例：帰り道の会" autocomplete="off" />
+          </label>
+          <div class="field-label">
+            使い方
+            <div class="room-type-grid">
+              <label class="room-type">
+                <input type="radio" name="roomType" value="pair" checked />
+                <span>1対1</span>
+              </label>
+              <label class="room-type">
+                <input type="radio" name="roomType" value="group" />
+                <span>グループ</span>
+              </label>
+            </div>
+          </div>
+          <button type="submit" class="primary-button">ルームを作る</button>
+        </form>
+        ${createdRoom ? renderCreatedRoom(createdRoom) : ""}
+      </div>
+    </section>
+  `;
+}
+
+function renderCreatedRoom(room) {
+  const inviteLink = makeInviteLink(room.id);
+  return `
+    <div class="created-room">
+      <strong>${escapeHtml(room.name)}を作りました。</strong>
+      <span class="invite-link">${escapeHtml(inviteLink)}</span>
+      <div class="gacha-actions">
+        <button type="button" class="copy-button" data-action="copy-invite" data-room-id="${escapeAttribute(room.id)}">招待リンクをコピー</button>
+        <button type="button" class="primary-button" data-action="open-room" data-room-id="${escapeAttribute(room.id)}">チャットを開く</button>
+        <button type="button" class="ghost-button" data-action="go-home">マイページへ</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderChat() {
+  const room = currentRoom();
+  if (!room) {
+    ui.view = "home";
+    return renderHome();
+  }
+
+  return `
+    <section class="screen chat-shell">
+      <header class="chat-header">
+        <button type="button" class="back-button" data-action="go-home">戻る</button>
+        <div>
+          <p class="eyebrow">${room.type === "group" ? "group room" : "pair room"}</p>
+          <h1>${escapeHtml(room.name)}</h1>
+        </div>
+        <div class="chat-tools">
+          <label class="reaction-sound-toggle" title="リアクションの音を切り替える">
+            <input type="checkbox" data-setting="reaction-sound" aria-label="リアクションの音" ${PotonchuFeedback.enabled ? "checked" : ""} />
+            <span>音</span>
+          </label>
+          <div class="participant-stack" aria-label="参加者">
+            ${room.members.map((member) => renderAvatar(member, "avatar small", member.name)).join("")}
+          </div>
+        </div>
+      </header>
+
+      <section class="message-list" aria-label="一首チャット">
+        ${renderRoomStatus(room)}
+        ${renderReflectionCard(room)}
+        ${renderMessages(room)}
+      </section>
+
+      <section class="composer-dock">
+        <p class="dock-note">ここに届くのは、完成した一首だけ。</p>
+        <button type="button" class="primary-button" data-action="go-topic">一首をつくる</button>
+      </section>
+    </section>
+  `;
+}
+
+function renderTalk() {
+  const context = currentTalkContext();
+  if (!context) {
+    stopTalkSubscription();
+    ui.view = "chat";
+    return renderChat();
+  }
+  const { room, message, key } = context;
+  const replies = sharedState.talks[key] || [];
+  const draft = ui.talkDrafts.get(key) || "";
+  const status = backend.talkStatus.get(key);
+  const sending = backend.talkSending.has(key);
+  return `
+    <section class="screen talk-shell">
+      <header class="chat-header">
+        <button type="button" class="back-button" data-action="close-talk">一首のルームへ</button>
+        <div><p class="eyebrow">${escapeHtml(room.name)}</p><h1>この一首のお話</h1></div>
+        <div class="participant-stack" aria-label="参加者">${room.members.map((member) => renderAvatar(member, "avatar small", member.name)).join("")}</div>
+      </header>
+      <section class="talk-original" aria-label="きっかけの一首">
+        <div class="message-meta">${renderAvatar(message.author, "avatar small")}<span>${escapeHtml(message.author.name)} ・ ${formatDate(message.createdAt)}</span></div>
+        <span class="message-topic">${escapeHtml(message.topic)}</span>
+        ${renderPoemLines(message.lines)}
+      </section>
+      <section class="talk-replies" data-talk-key="${escapeAttribute(key)}" aria-label="この一首のトーク" aria-live="polite" aria-relevant="additions text">
+        ${status?.error ? `<div class="talk-status" role="status"><p>${escapeHtml(status.error)}</p><button type="button" class="copy-button" data-action="retry-talk-loading">もう一度つなぐ</button></div>` : ""}
+        ${!replies.length ? `<p class="talk-empty">${status?.loading ? "お話をひらいています。" : "この一首の、どこが気になった？"}</p>` : ""}
+        ${replies.slice().sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)).map((reply) => `
+          <article class="talk-reply ${reply.author.id === appState.user.id ? "is-mine" : ""}">
+            <div class="message-meta">${renderAvatar(reply.author, "avatar small")}<span>${escapeHtml(reply.author.name)} ・ ${formatDate(reply.createdAt)}</span></div>
+            <p class="talk-text">${escapeHtml(reply.text)}</p>
+            ${reply.status === "sending" ? '<span class="talk-send-status">送信中</span>' : ""}
+            ${reply.status === "failed" ? `<div class="talk-send-error" role="status"><span>届きませんでした。</span><button type="button" class="mini-button" data-action="retry-talk-reply" data-reply-id="${escapeAttribute(reply.id)}">もう一度送る</button></div>` : ""}
+          </article>
+        `).join("")}
+      </section>
+      <form class="talk-composer" data-form="talk-reply">
+        <label class="talk-input-label" for="talkReplyInput">この一首への返事</label>
+        <textarea id="talkReplyInput" name="reply" rows="2" placeholder="気になったことを、ひとこと。" aria-describedby="talkReplyCount">${escapeHtml(draft)}</textarea>
+        <button type="submit" class="primary-button" id="talkReplySubmit" ${sending || !draft.trim() || countChars(draft.trim()) > 500 ? "disabled" : ""}>送る</button>
+        <span id="talkReplyCount" class="talk-reply-count">${countChars(draft.trim())} / 500</span>
+      </form>
+    </section>
+  `;
+}
+
+function currentTalkContext() {
+  const room = currentRoom();
+  const message = room?.messages.find((item) => item.id === ui.talkMessageId);
+  return room && message ? { room, message, key: talkKey(room.id, message.id) } : null;
+}
+
+function talkKey(roomId, messageId) {
+  return JSON.stringify([roomId, messageId]);
+}
+
+function openTalk(messageId) {
+  const room = currentRoom();
+  const message = room?.messages.find((item) => item.id === messageId);
+  if (!message || message.status) return;
+  ui.talkMessageId = messageId;
+  ui.talkComposing = false;
+  ui.openReactionFor = "";
+  ui.view = "talk";
+  if (isFirebaseMode()) subscribeFirebaseTalk(room.id, messageId);
+  render();
+}
+
+function stopTalkSubscription() {
+  backend.talkUnsubscribe?.();
+  backend.talkUnsubscribe = null;
+  backend.talkSubscriptionKey = "";
+}
+
+function subscribeFirebaseTalk(roomId, messageId) {
+  const key = talkKey(roomId, messageId);
+  if (!isFirebaseMode() || backend.talkSubscriptionKey === key) return;
+  stopTalkSubscription();
+  const { firestoreModule, db } = backend.firebase;
+  backend.talkSubscriptionKey = key;
+  backend.talkStatus.set(key, { loading: true });
+  backend.talkUnsubscribe = firestoreModule.onSnapshot(
+    firestoreModule.collection(db, "rooms", roomId, "messages", messageId, "replies"),
+    (snapshot) => {
+      const replies = snapshot.docs.map((doc) => normalizeTalkReply({ ...doc.data(), id: doc.id, status: doc.metadata?.hasPendingWrites ? "sending" : "" }));
+      const pending = (sharedState.talks[key] || []).filter((reply) => reply.status && !replies.some((item) => item.id === reply.id));
+      sharedState.talks = { ...sharedState.talks, [key]: [...replies, ...pending] };
+      backend.talkStatus.set(key, { loading: false });
+      if (ui.view === "talk" && currentTalkContext()?.key === key) render();
+    },
+    (error) => {
+      backend.talkStatus.set(key, { loading: false, error: error.code === "permission-denied"
+        ? "このお話を読み込めません。ルームの管理者に知らせてください。"
+        : "お話につながりませんでした。もう一度つないでみてください。" });
+      if (ui.view === "talk" && currentTalkContext()?.key === key) render();
+    },
+  );
+}
+
+function putTalkReply(key, reply) {
+  sharedState.talks = { ...sharedState.talks, [key]: [...(sharedState.talks[key] || []).filter((item) => item.id !== reply.id), normalizeTalkReply(reply)] };
+  if (!isFirebaseMode()) roomStore.save(sharedState);
+}
+
+async function sendTalkReply(retryId = "") {
+  const context = currentTalkContext();
+  if (!context || backend.talkSending.has(context.key)) return;
+  const { room, message, key } = context;
+  const user = normalizeUser(appState.user);
+  const previous = retryId ? sharedState.talks[key]?.find((reply) => reply.id === retryId && reply.author.id === user.id && reply.status === "failed") : null;
+  if (retryId && !previous) return;
+  const text = previous?.text || (ui.talkDrafts.get(key) || "").trim();
+  if (!text || countChars(text) > 500) {
+    showToast("返事は1〜500字で入れてください。");
+    return;
+  }
+  const reply = previous || { id: makeId("reply"), text, author: user, createdAt: Date.now() };
+  ui.scrollTalkToEnd = true;
+  if (!retryId) ui.talkDrafts.delete(key);
+  putTalkReply(key, { ...reply, status: isFirebaseMode() ? "sending" : "" });
+  if (!isFirebaseMode()) { render(); return; }
+  backend.talkSending.add(key);
+  render();
+  try {
+    const { firestoreModule, db } = backend.firebase;
+    const replyRef = firestoreModule.doc(db, "rooms", room.id, "messages", message.id, "replies", reply.id);
+    if (retryId) {
+      const saved = await firestoreModule.getDoc(replyRef);
+      if (saved.exists()) {
+        if (saved.data().senderId !== user.id || saved.data().text !== text) throw new Error("reply-conflict");
+        if (appState.user?.id === user.id) putTalkReply(key, { ...saved.data(), id: reply.id, status: "" });
+        return;
+      }
+    }
+    await firestoreModule.setDoc(replyRef, {
+      kind: "text", text, senderId: user.id, senderName: user.name,
+      senderPhoto: getAvatarImage(user) || "", createdAt: firestoreModule.serverTimestamp(), createdAtMillis: reply.createdAt,
+    });
+    if (appState.user?.id === user.id) putTalkReply(key, { ...reply, status: "" });
+  } catch (error) {
+    if (appState.user?.id === user.id) {
+      putTalkReply(key, { ...reply, status: "failed" });
+      showToast(error.code === "permission-denied" ? "返事を保存できません。ルームの管理者に知らせてください。" : "返事が届きませんでした。もう一度送れます。");
+    }
+  } finally {
+    backend.talkSending.delete(key);
+    if (ui.view === "talk" && currentTalkContext()?.key === key && appState.user?.id === user.id) render();
+  }
+}
+
+function renderRoomStatus(room) {
+  const messageError = backend.messageErrors.get(room.id);
+  if (messageError) {
+    return `
+      <div class="room-status-card is-error">
+        <p>一首の読み込みが止まっています。FirebaseのFirestoreルールを確認してください。</p>
+        <span class="status-code">${escapeHtml(messageError)}</span>
+      </div>
+    `;
+  }
+  if (room.members.length <= 1) {
+    return `
+      <div class="room-status-card">
+        <p>まだ相手がいません。招待リンクを送ってみる。</p>
+        <button type="button" class="copy-button" data-action="copy-invite" data-room-id="${escapeAttribute(room.id)}">招待リンクをコピー</button>
+      </div>
+    `;
+  }
+  return "";
+}
+
+function renderMessages(room) {
+  if (room.messages.length === 0) {
+    return `
+      <div class="empty-state">
+        <p>まだ一首は届いていません。</p>
+        <button type="button" class="primary-button" data-action="go-topic">一首をつくる</button>
+        <button type="button" class="copy-button" data-action="copy-invite" data-room-id="${escapeAttribute(room.id)}">招待リンクをコピー</button>
+      </div>
+    `;
+  }
+
+  return room.messages
+    .slice()
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .map((message) => renderMessage(message, room))
+    .join("");
+}
+
+function renderMessage(message, room) {
+  const isMine = message.author.id === appState.user.id;
+  const statusText = message.status === "sending" ? " ・ 送信中" : message.status === "failed" ? " ・ 送れませんでした" : "";
+  const canReact = !message.status;
+  const reactionError = backend.reactionErrors.get(message.id);
+  const pulse = ui.reactionPulse?.messageId === message.id && ui.reactionPulse.until > Date.now() ? ui.reactionPulse : null;
+  return `
+    <article class="message-row ${isMine ? "is-mine" : ""}">
+      <div class="message-meta ${isMine ? "is-mine" : ""}">
+        ${isMine ? "" : renderAvatar(message.author, "avatar small", message.author.name)}
+        <span>${escapeHtml(message.author.name)} ・ ${formatDate(message.createdAt)}${statusText}</span>
+      </div>
+      <div class="poem-bubble">
+        <button type="button" class="poem-open-talk" data-action="open-talk" data-message-id="${escapeAttribute(message.id)}" aria-label="${escapeAttribute(message.author.name)}さんの一首について話す" ${message.status ? "disabled" : ""}>
+        <span class="message-topic">${escapeHtml(message.topic)}</span>
+        <span class="poem-lines">${message.lines.map((line) => `<span class="poem-line">${escapeHtml(line)}</span>`).join("")}</span>
+        </button>
+        <div class="reaction-row" aria-label="ついているリアクション">${renderReactionSummary(message, room)}</div>
+        ${pulse ? `<span class="reaction-pop" aria-hidden="true">${escapeHtml(pulse.label)}</span>` : ""}
+        <div class="message-footer">
+          <button type="button" class="mini-button" data-action="favorite-message" data-message-id="${escapeAttribute(message.id)}">お気に入りにする</button>
+          <button type="button" class="mini-button talk-toggle" data-action="open-talk" data-message-id="${escapeAttribute(message.id)}" ${message.status ? "disabled" : ""}>この一首のトーク</button>
+          <button type="button" class="mini-button reaction-toggle" data-action="toggle-reaction-picker" data-message-id="${escapeAttribute(message.id)}" aria-expanded="${ui.openReactionFor === message.id}" aria-controls="reactions-${escapeAttribute(message.id)}" ${canReact ? "" : "disabled"}>＋ リアクション</button>
+        </div>
+        ${reactionError ? `<p class="reaction-error" role="status">${escapeHtml(reactionError)}</p>` : ""}
+      </div>
+      ${ui.openReactionFor === message.id ? renderReactionPicker(message, room) : ""}
+    </article>
+  `;
+}
+
+function renderReactionSummary(message, room) {
+  const activeReactions = Object.entries(message.reactions || {}).filter(([, users]) => users.length > 0);
+  if (activeReactions.length === 0) return "";
+  return activeReactions
+    .map(([label, users]) => {
+      const mine = users.includes(appState.user.id);
+      const pending = isReactionPending(room.id, message.id, label);
+      return `<button type="button" class="reaction-pill ${mine ? "is-active" : ""}" data-action="toggle-reaction" data-room-id="${escapeAttribute(room.id)}" data-message-id="${escapeAttribute(message.id)}" data-reaction="${escapeAttribute(label)}" aria-label="${escapeAttribute(label)} ${users.length}人" aria-pressed="${mine}" aria-busy="${pending}" ${pending || message.status ? "disabled" : ""}>${escapeHtml(label)} <span>${users.length}</span></button>`;
+    })
+    .join("");
+}
+
+function renderReactionPicker(message, room) {
+  return `
+    <div class="reaction-picker" id="reactions-${escapeAttribute(message.id)}" role="group" aria-label="リアクションをえらぶ">
+      <div class="reaction-picker-header"><span>どんな気持ち？</span><button type="button" class="reaction-close" data-action="toggle-reaction-picker" data-message-id="${escapeAttribute(message.id)}" aria-label="リアクションを閉じる" title="閉じる">×</button></div>
+      ${reactionOptions
+        .map((option) => {
+          const users = message.reactions?.[option.id] || [];
+          const active = users.includes(appState.user.id);
+          const count = users.length ? ` ${users.length}` : "";
+          const pending = isReactionPending(room.id, message.id, option.id);
+          return `<button type="button" class="reaction-pill ${option.type === "emoji" ? "is-emoji" : ""} ${active ? "is-active" : ""}" data-action="toggle-reaction" data-room-id="${escapeAttribute(room.id)}" data-message-id="${escapeAttribute(message.id)}" data-reaction="${escapeAttribute(option.id)}" aria-pressed="${active}" aria-label="${escapeAttribute(option.label)}" ${pending ? "disabled" : ""}>${escapeHtml(option.label)}${count}</button>`;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
+function renderReflectionCard(room) {
+  const reflection = getYesterdayReflection(room);
+  if (!reflection) return "";
+  return `
+    <section class="reflection-card" aria-label="昨日の一首">
+      <div>
+        <p class="eyebrow">昨日のぽとん</p>
+        <h2>${escapeHtml(reflection.copy)}</h2>
+      </div>
+      <div class="reflection-poem">
+        <span class="message-topic">${escapeHtml(reflection.message.topic)}</span>
+        ${renderPoemLines(reflection.message.lines)}
+      </div>
+      <p>${escapeHtml(reflection.question)}</p>
+      <button type="button" class="primary-button" data-action="reply-yesterday">今日の一首で返す</button>
+    </section>
+  `;
+}
+
+function renderTopic() {
+  const current = currentRoom();
+  if (!current) {
+    ui.view = "home";
+    return renderHome();
+  }
+
+  return `
+    <section class="screen composer-screen">
+      ${renderTopbar(`<button type="button" class="back-button" data-action="go-chat">チャットへ</button>`)}
+      <div class="topic-panel">
+        <div class="topic-title">
+          <p class="eyebrow">${escapeHtml(current.name)}</p>
+          <h1>話したいお題を10字以内で</h1>
+        </div>
+        <form class="topic-form" data-form="topic">
+          <label class="field-label">
+            お題
+            <input id="topicInput" name="topic" value="${escapeAttribute(ui.topic)}" placeholder="例：テストやばい、雨の帰り道" autocomplete="off" />
+          </label>
+          <div class="counter-row" id="topicCounter">
+            <span>好きなお題を自由に</span>
+            <span id="topicCount">残り10字</span>
+          </div>
+          <div class="topic-example-wrap" aria-label="おすすめお題">
+            <p class="topic-hint">おすすめお題</p>
+            ${topicGroups
+              .map(
+                (group) => `
+                  <section class="topic-group">
+                    <h2>${escapeHtml(group.label)}</h2>
+                    <div class="topic-examples">
+                      ${group.topics.map((topic) => `<button type="button" class="topic-chip" data-action="use-topic" data-topic="${escapeAttribute(topic)}">${escapeHtml(topic)}</button>`).join("")}
+                    </div>
+                  </section>
+                `,
+              )
+              .join("")}
+          </div>
+          <button type="submit" class="primary-button" id="topicSubmit">一首ガチャを回す</button>
+        </form>
+      </div>
+    </section>
+  `;
+}
+
+function renderGacha() {
+  const composer = ui.composer;
+  if (!composer) {
+    ui.view = "topic";
+    return renderTopic();
+  }
+
+  if (composer.step === "loading") {
+    return `
+      <section class="screen composer-screen">
+        ${renderTopbar(`<button type="button" class="back-button" data-action="go-topic">お題へ</button>`)}
+        <div class="gacha-panel">
+          <div class="gacha-head">
+            <div class="gacha-title">
+              <p class="eyebrow">isshu gacha</p>
+              <h1>一首ガチャ</h1>
+            </div>
+            <span class="topic-badge">${escapeHtml(composer.topic)}</span>
+          </div>
+          <div class="machine-wrap">
+            <div>
+              <div class="gacha-machine" aria-hidden="true">
+                <div class="machine-globe">
+                  <span class="capsule capsule-one"></span>
+                  <span class="capsule capsule-two"></span>
+                  <span class="capsule capsule-three"></span>
+                  <span class="capsule capsule-four"></span>
+                </div>
+                <div class="machine-body">
+                  <div class="machine-handle"></div>
+                </div>
+                <div class="machine-slot"></div>
+              </div>
+              <div class="machine-dots" aria-hidden="true">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+              <p class="machine-caption">${escapeHtml(composer.loadingCopy)}</p>
+            </div>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  if (composer.step === "confirm") return renderConfirm();
+
+  const isDropping = composer.step === "dropping";
+  const isResting = composer.step === "resting";
+  const poemMode = isDropping ? "dropping" : isResting ? "settled" : "blank";
+  return `
+    <section class="screen composer-screen">
+      ${renderTopbar(`<button type="button" class="back-button" data-action="go-topic">お題へ</button>`)}
+      <div class="gacha-panel">
+        <div class="gacha-head">
+          <div class="gacha-title">
+            <p class="eyebrow">isshu gacha</p>
+            <h1>穴あき一首</h1>
+          </div>
+          <span class="topic-badge">${escapeHtml(composer.topic)}</span>
+        </div>
+        <section class="poem-stage">
+          <div class="poem-paper">
+            ${renderDraftPoem(composer.draft, composer.selectedChoice, poemMode)}
+          </div>
+          ${
+            isResting
+              ? ""
+              : `<div class="choice-grid">
+                  ${composer.draft.choices
+                    .map(
+                      (choice) => `
+                        <button type="button" class="choice-button ${choice === composer.selectedChoice ? "is-picked" : ""}" data-action="choose-word" data-choice="${escapeAttribute(choice)}" ${isDropping ? "disabled" : ""}>
+                          ${escapeHtml(choice)}
+                        </button>
+                      `,
+                    )
+                    .join("")}
+                </div>`
+          }
+        </section>
+        ${
+          isResting
+            ? ""
+            : `<div class="gacha-actions">
+                <button type="button" class="subtle-button" data-action="reroll">引き直し</button>
+                <button type="button" class="ghost-button" data-action="go-topic">お題を変える</button>
+                <button type="button" class="ghost-button" data-action="go-chat">チャットへ</button>
+              </div>`
+        }
+      </div>
+    </section>
+  `;
+}
+
+function renderConfirm() {
+  const composer = ui.composer;
+  const lines = completePoemLines(composer.draft, composer.selectedChoice);
+  return `
+    <section class="screen composer-screen">
+      ${renderTopbar(`<button type="button" class="back-button" data-action="go-chat">チャットへ</button>`)}
+      <div class="confirm-panel">
+        <div>
+          <p class="eyebrow">send</p>
+          <h1>この一首で送る？</h1>
+          <p class="confirm-copy">説明は足さず、一首だけ届きます。</p>
+        </div>
+        <div class="poem-stage">
+          <div class="poem-paper">
+            ${renderPoemLines(lines)}
+          </div>
+        </div>
+        <div class="confirm-actions">
+          <button type="button" class="send-button" data-action="send-poem">この一首を送る</button>
+          <button type="button" class="subtle-button" data-action="reroll">もう一回まわす</button>
+          <button type="button" class="ghost-button" data-action="choose-again">選び直す</button>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderDraftPoem(draft, selectedChoice, mode) {
+  const lines = draft.lines
+    .map((line) => {
+      if (line !== BLANK) return `<span class="poem-line">${escapeHtml(line)}</span>`;
+      if (mode === "blank") return `<span class="poem-line"><span class="blank-slot">＿＿＿＿</span></span>`;
+      if (mode === "dropping") {
+        return `<span class="poem-line"><span class="blank-slot is-filled is-dropping"><span class="landing-puff"></span><span class="falling-word">${escapeHtml(selectedChoice)}</span></span></span>`;
+      }
+      return `<span class="poem-line"><span class="blank-slot is-filled"><span class="settled-word">${escapeHtml(selectedChoice)}</span></span></span>`;
+    })
+    .join("");
+
+  return `<div class="poem-lines">${lines}</div>`;
+}
+
+function renderPoemLines(lines) {
+  return `
+    <div class="poem-lines">
+      ${lines.map((line) => `<span class="poem-line">${escapeHtml(line)}</span>`).join("")}
+    </div>
+  `;
+}
+
+function selectedRadio(form, name) {
+  return form.querySelector(`input[name="${name}"]:checked`)?.value || "";
+}
+
+async function handleClick(event) {
+  const button = event.target.closest("[data-action]");
+  if (!button) {
+    if (event.target.closest(".reaction-sound-toggle")) return;
+    if (ui.openReactionFor && !event.target.closest(".reaction-picker")) {
+      ui.openReactionFor = "";
+      render();
+    }
+    return;
+  }
+
+  const action = button.dataset.action;
+
+  if (action === "open-talk") {
+    openTalk(button.dataset.messageId);
+    return;
+  }
+  if (action === "close-talk") {
+    stopTalkSubscription();
+    ui.talkComposing = false;
+    ui.talkMessageId = "";
+    ui.view = "chat";
+    render();
+    return;
+  }
+  if (action === "retry-talk-loading") {
+    const context = currentTalkContext();
+    if (context) {
+      stopTalkSubscription();
+      subscribeFirebaseTalk(context.room.id, context.message.id);
+      render();
+    }
+    return;
+  }
+  if (action === "retry-talk-reply") {
+    await sendTalkReply(button.dataset.replyId);
+    return;
+  }
+
+  if (action === "google-login") {
+    if (isFirebaseMode()) {
+      await signInWithFirebase();
+      return;
+    }
+    ui.view = "setup";
+    render();
+    return;
+  }
+
+  if (action === "logout") {
+    await signOutCurrentUser();
+    ui.view = "login";
+    render();
+    showToast("ログアウトしました。");
+    return;
+  }
+
+  if (action === "go-home") {
+    stopTalkSubscription();
+    ui.talkComposing = false;
+    ui.view = "home";
+    ui.createResultId = null;
+    render();
+    return;
+  }
+
+  if (action === "go-create-room") {
+    ui.view = "create-room";
+    ui.createResultId = null;
+    render();
+    return;
+  }
+
+  if (action === "open-room") {
+    await setActiveRoom(button.dataset.roomId);
+    ui.view = "chat";
+    render();
+    return;
+  }
+
+  if (action === "go-chat") {
+    ui.view = "chat";
+    render();
+    return;
+  }
+
+  if (action === "go-topic") {
+    ui.view = "topic";
+    ui.topic = "";
+    ui.composer = null;
+    render();
+    return;
+  }
+
+  if (action === "use-topic") {
+    const input = document.querySelector("#topicInput");
+    if (input) {
+      input.value = button.dataset.topic;
+      ui.topic = input.value;
+      updateTopicCounter();
+    }
+    return;
+  }
+
+  if (action === "reroll") {
+    spinGacha(ui.composer?.topic || ui.topic, ui.composer?.draft?.templateId);
+    return;
+  }
+
+  if (action === "choose-word") {
+    chooseWord(button.dataset.choice);
+    return;
+  }
+
+  if (action === "choose-again") {
+    if (ui.composer?.draft) {
+      ui.composer.step = "gacha";
+      ui.composer.selectedChoice = "";
+      render();
+    }
+    return;
+  }
+
+  if (action === "send-poem") {
+    await sendPoem();
+    return;
+  }
+
+  if (action === "toggle-reaction") {
+    await toggleReaction(button.dataset.roomId, button.dataset.messageId, button.dataset.reaction);
+    return;
+  }
+
+  if (action === "toggle-reaction-picker") {
+    ui.openReactionFor = ui.openReactionFor === button.dataset.messageId ? "" : button.dataset.messageId;
+    render();
+    return;
+  }
+
+  if (action === "favorite-message") {
+    await saveFavorite(button.dataset.messageId);
+    return;
+  }
+
+  if (action === "choose-profile-photo") {
+    document.querySelector("#profilePhotoInput")?.click();
+    return;
+  }
+
+  if (action === "save-profile-photo") {
+    await saveProfilePhoto();
+    return;
+  }
+
+  if (action === "enable-notifications") {
+    await enableNotifications();
+    return;
+  }
+
+  if (action === "reply-yesterday") {
+    ui.topic = "昨日の続き";
+    ui.composer = null;
+    ui.view = "topic";
+    render();
+    return;
+  }
+
+  if (action === "copy-invite") {
+    await copyInvite(button.dataset.roomId);
+  }
+}
+
+async function handleSubmit(event) {
+  const form = event.target.closest("[data-form]");
+  if (!form) return;
+  event.preventDefault();
+
+  if (form.dataset.form === "talk-reply") {
+    const context = currentTalkContext();
+    if (context) ui.talkDrafts.set(context.key, form.elements.namedItem("reply").value);
+    await sendTalkReply();
+    return;
+  }
+
+  if (form.dataset.form === "setup") {
+    const name = form.name.value.trim();
+    const icon = selectedRadio(form, "icon");
+    if (!name) {
+      showToast("ユーザー名を入れてください。");
+      return;
+    }
+
+    const user = {
+      id: makeId("user"),
+      name,
+      icon,
+      provider: "google-mock",
+      createdAt: Date.now(),
+    };
+    saveSessionUser(user);
+    await upsertUser(user);
+    await routeAfterAuth();
+    return;
+  }
+
+  if (form.dataset.form === "room") {
+    const name = form.roomName.value.trim();
+    const type = selectedRadio(form, "roomType") || "pair";
+    if (!name) {
+      showToast("ルーム名を入れてください。");
+      return;
+    }
+
+    const room = await createRoom(name, type);
+    await setActiveRoom(room.id);
+    ui.createResultId = room.id;
+    render();
+    showToast("招待リンクを作りました。");
+    return;
+  }
+
+  if (form.dataset.form === "topic") {
+    const topic = form.topic.value.trim();
+    const count = countChars(topic);
+    if (!topic) {
+      showToast("お題を入れてください。");
+      return;
+    }
+    if (count > 10) {
+      showToast("お題は10字以内です。");
+      return;
+    }
+    ui.topic = topic;
+    spinGacha(topic);
+  }
+}
+
+function handleInput(event) {
+  if (event.target.id === "talkReplyInput") {
+    const context = currentTalkContext();
+    if (!context) return;
+    ui.talkDrafts.set(context.key, event.target.value);
+    const count = countChars(event.target.value.trim());
+    const button = document.querySelector("#talkReplySubmit");
+    if (button) button.disabled = count === 0 || count > 500 || backend.talkSending.has(context.key);
+    const counter = document.querySelector("#talkReplyCount");
+    if (counter) counter.textContent = `${count} / 500`;
+    return;
+  }
+  if (event.target.dataset.setting === "reaction-sound") {
+    PotonchuFeedback.setEnabled(event.target.checked);
+    if (event.target.checked) PotonchuFeedback.play();
+    return;
+  }
+  if (event.target.id === "profilePhotoInput") {
+    handleProfilePhotoSelection(event.target.files?.[0]);
+    return;
+  }
+  if (event.target.id !== "topicInput") return;
+  ui.topic = event.target.value;
+  updateTopicCounter();
+}
+
+async function routeAfterAuth() {
+  if (ui.pendingInviteRoomId) {
+    const room = await ensureJoinedRoom(ui.pendingInviteRoomId);
+    await setActiveRoom(room.id);
+    ui.view = "chat";
+    render();
+    showToast("招待リンクから参加しました。");
+    return;
+  }
+
+  ui.view = "home";
+  render();
+}
+
+async function createRoom(name, type) {
+  const id = makeId("room");
+  const room = {
+    id,
+    name,
+    type,
+    createdBy: appState.user.id,
+    inviteCode: id,
+    members: createMembersForRoom(type),
+    messages: [],
+    createdAt: Date.now(),
+  };
+  if (isFirebaseMode()) {
+    const { firestoreModule, db } = backend.firebase;
+    await firestoreModule.setDoc(firestoreModule.doc(db, "rooms", id), {
+      roomName: name,
+      type,
+      createdBy: appState.user.id,
+      inviteCode: id,
+      memberIds: [appState.user.id],
+      members: createMembersForRoom(type),
+      createdAt: firestoreModule.serverTimestamp(),
+      createdAtMillis: room.createdAt,
+    });
+    upsertLocalRoom(room);
+    return room;
+  }
+  sharedState = roomStore.update((data) => {
+    data.rooms = [room, ...data.rooms.filter((item) => item.id !== room.id)];
+    return data;
+  });
+  refreshAppState();
+  return room;
+}
+
+function createMembersForRoom(type) {
+  const current = normalizeUser(appState.user);
+  return [current];
+}
+
+async function ensureJoinedRoom(roomId) {
+  let room = findRoom(roomId);
+  if (isFirebaseMode()) {
+    const { firestoreModule, db } = backend.firebase;
+    const roomRef = firestoreModule.doc(db, "rooms", roomId);
+    const snapshot = await firestoreModule.getDoc(roomRef);
+    const member = normalizeUser(appState.user);
+    if (!snapshot.exists()) {
+      room = {
+        id: roomId,
+        name: ui.pendingInviteName || `招待ルーム ${roomId.slice(-4).toUpperCase()}`,
+        type: ui.pendingInviteType === "pair" ? "pair" : "group",
+        createdBy: appState.user.id,
+        inviteCode: roomId,
+        members: [member],
+        messages: [],
+        createdAt: Date.now(),
+      };
+      await firestoreModule.setDoc(roomRef, {
+        roomName: room.name,
+        type: room.type,
+        createdBy: appState.user.id,
+        inviteCode: roomId,
+        memberIds: [member.id],
+        members: [member],
+        createdAt: firestoreModule.serverTimestamp(),
+        createdAtMillis: room.createdAt,
+      });
+      upsertLocalRoom(room);
+      return room;
+    }
+    room = normalizeFirebaseRoom(snapshot);
+    const hasUser = room.members.some((item) => item.id === member.id);
+    if (!hasUser) {
+      await firestoreModule.updateDoc(roomRef, {
+        memberIds: firestoreModule.arrayUnion(member.id),
+        members: firestoreModule.arrayUnion(member),
+      });
+      room.members.push(member);
+    }
+    upsertLocalRoom(room);
+    subscribeFirebaseMessages(roomId);
+    return room;
+  }
+
+  if (!room) {
+    room = {
+      id: roomId,
+      name: ui.pendingInviteName || `招待ルーム ${roomId.slice(-4).toUpperCase()}`,
+      type: ui.pendingInviteType === "pair" ? "pair" : "group",
+      createdBy: "",
+      inviteCode: roomId,
+      members: [],
+      messages: [],
+      createdAt: Date.now(),
+    };
+    sharedState = roomStore.update((data) => {
+      data.rooms = [room, ...data.rooms];
+      return data;
+    });
+    refreshAppState();
+    room = findRoom(roomId);
+  }
+
+  const hasUser = room.members.some((member) => member.id === appState.user.id);
+  if (!hasUser) {
+    const user = normalizeUser(appState.user);
+    sharedState = roomStore.update((data) => {
+      const target = data.rooms.find((item) => item.id === roomId);
+      if (target && !target.members.some((member) => member.id === user.id)) target.members.push(user);
+      return data;
+    });
+    refreshAppState();
+    room = findRoom(roomId);
+  }
+
+  return room;
+}
+
+async function upsertUser(user) {
+  const normalized = normalizeUser(user);
+  if (isFirebaseMode()) {
+    const { firestoreModule, db } = backend.firebase;
+    await firestoreModule.setDoc(
+      firestoreModule.doc(db, "users", normalized.id),
+      {
+        displayName: normalized.name,
+        photoURL: normalized.photoURL || "",
+        customIconURL: normalized.customIconURL || "",
+        updatedAt: firestoreModule.serverTimestamp(),
+      },
+      { merge: true },
+    );
+  }
+  upsertLocalUser(normalized);
+}
+
+function upsertLocalUser(user) {
+  const normalized = normalizeUser(user);
+  if (backend.mode === "firebase") {
+    const users = sharedState.users.filter((item) => item.id !== normalized.id);
+    sharedState = normalizeSharedState({ ...sharedState, users: [...users, normalized] });
+    refreshAppState();
+    return;
+  }
+  sharedState = roomStore.update((data) => {
+    const index = data.users.findIndex((item) => item.id === normalized.id);
+    if (index >= 0) data.users[index] = normalized;
+    else data.users.push(normalized);
+    return data;
+  });
+  refreshAppState();
+}
+
+function upsertLocalRoom(room) {
+  const existing = sharedState.rooms.find((item) => item.id === room.id);
+  const nextRoom = {
+    ...room,
+    messages: room.messages?.length ? room.messages : existing?.messages || [],
+  };
+  sharedState = normalizeSharedState({
+    ...sharedState,
+    rooms: [nextRoom, ...sharedState.rooms.filter((item) => item.id !== room.id)],
+  });
+  if (backend.mode !== "firebase") roomStore.save(sharedState);
+  refreshAppState();
+}
+
+function upsertLocalMessage(roomId, message) {
+  sharedState = normalizeSharedState({
+    ...sharedState,
+    rooms: sharedState.rooms.map((room) => {
+      if (room.id !== roomId) return room;
+      const messages = [
+        message,
+        ...room.messages.filter((item) => item.id !== message.id && (!message.clientId || item.clientId !== message.clientId)),
+      ].sort((a, b) => a.createdAt - b.createdAt);
+      return { ...room, messages };
+    }),
+  });
+  if (backend.mode !== "firebase") roomStore.save(sharedState);
+  refreshAppState();
+}
+
+async function setActiveRoom(roomId) {
+  appState.activeRoomId = roomId;
+  sessionStorage.setItem(ACTIVE_ROOM_KEY, roomId);
+  if (appState.user) await ensureJoinedRoom(roomId);
+}
+
+async function spinGacha(topic, previousTemplateId = "") {
+  topic = PotonchuPoems.normalizeTopic(topic);
+  if (!topic || countChars(topic) > 10) {
+    showToast("お題は1〜10字で入れてください。");
+    return;
+  }
+  ui.view = "gacha";
+  const composer = {
+    topic,
+    step: "loading",
+    draft: null,
+    selectedChoice: "",
+    loadingCopy: pickOne(gachaCaptions),
+  };
+  ui.composer = composer;
+  render();
+
+  try {
+    const [draft] = await Promise.all([
+      generatePoem(topic, previousTemplateId, appState.activeRoomId),
+      new Promise((resolve) => window.setTimeout(resolve, 1700)),
+    ]);
+    if (ui.composer !== composer || ui.view !== "gacha") return;
+    composer.draft = draft;
+    composer.step = "gacha";
+    render();
+  } catch (error) {
+    if (ui.composer !== composer || ui.view !== "gacha") return;
+    ui.view = "topic";
+    render();
+    showToast("一首を用意できませんでした。もう一度まわしてみてください。");
+  }
+}
+
+function chooseWord(choice) {
+  if (!ui.composer || ui.composer.step !== "gacha") return;
+  if (!ui.composer.draft?.choices.includes(choice)) return;
+  ui.composer.selectedChoice = choice;
+  ui.composer.step = "dropping";
+  render();
+
+  const composer = ui.composer;
+  window.setTimeout(() => {
+    if (ui.composer !== composer || ui.composer.selectedChoice !== choice) return;
+    ui.composer.step = "resting";
+    render();
+    window.setTimeout(() => {
+      if (ui.composer !== composer || ui.composer.selectedChoice !== choice || ui.composer.step !== "resting") return;
+      ui.composer.step = "confirm";
+      render();
+    }, 1050);
+  }, 980);
+}
+
+async function sendPoem() {
+  const room = currentRoom();
+  const composer = ui.composer;
+  if (!room || !composer?.draft || composer.step !== "confirm" || !composer.draft.choices.includes(composer.selectedChoice)) return;
+
+  const lines = completePoemLines(composer.draft, composer.selectedChoice);
+  const clientId = makeId("client");
+  const message = {
+    id: makeId("pending"),
+    roomId: room.id,
+    topic: composer.topic,
+    lines,
+    poemLines: lines,
+    selectedWord: composer.selectedChoice,
+    clientId,
+    status: isFirebaseMode() ? "sending" : "",
+    author: normalizeUser(appState.user),
+    senderId: appState.user.id,
+    senderName: appState.user.name,
+    senderPhoto: getAvatarImage(appState.user) || appState.user.icon,
+    reactions: {},
+    createdAt: Date.now(),
+  };
+
+  if (isFirebaseMode()) {
+    const { firestoreModule, db } = backend.firebase;
+    upsertLocalMessage(room.id, message);
+    sessionStorage.setItem(ACTIVE_ROOM_KEY, room.id);
+    ui.composer = null;
+    ui.topic = "";
+    ui.openReactionFor = "";
+    ui.view = "chat";
+    render();
+    try {
+      const docRef = await firestoreModule.addDoc(firestoreModule.collection(db, "rooms", room.id, "messages"), {
+        clientId,
+        senderId: appState.user.id,
+        senderName: appState.user.name,
+        senderPhoto: getAvatarImage(appState.user) || appState.user.icon,
+        topic: composer.topic,
+        poemLines: lines,
+        selectedWord: composer.selectedChoice,
+        reactions: {},
+        notificationTitle: `${appState.user.name}さんから一首`,
+        notificationBody: "ぽとんと一首が届きました。",
+        notificationUrl: makeRoomUrl(room.id),
+        createdAt: firestoreModule.serverTimestamp(),
+        createdAtMillis: message.createdAt,
+      });
+      upsertLocalMessage(room.id, { ...message, id: docRef.id, status: "" });
+      render();
+      showToast("ぽとんと届きました");
+    } catch (error) {
+      upsertLocalMessage(room.id, { ...message, status: "failed" });
+      render();
+      showToast("一首を送れませんでした。");
+    }
+    return;
+  } else {
+    sharedState = roomStore.update((data) => {
+      const target = data.rooms.find((item) => item.id === room.id);
+      if (target) target.messages.push(message);
+      return data;
+    });
+    upsertLocalMessage(room.id, message);
+  }
+  await setActiveRoom(room.id);
+  ui.composer = null;
+  ui.topic = "";
+  ui.openReactionFor = "";
+  ui.view = "chat";
+  render();
+  showToast("ぽとんと届きました");
+}
+
+async function toggleReaction(roomId, messageId, label) {
+  const message = findRoom(roomId)?.messages.find((item) => item.id === messageId);
+  const userId = appState.user?.id;
+  if (!message || !userId || message.status || !reactionOptions.some((option) => option.id === label)) return;
+  const key = reactionKey(roomId, messageId, label);
+  if (backend.pendingReactions.has(key)) return;
+  if (isFirebaseMode() && navigator.onLine === false) {
+    showToast("つながってから、もう一度押してみてください。");
+    return;
+  }
+  const wasActive = (message.reactions[label] || []).includes(userId);
+  const adding = !wasActive;
+  backend.reactionErrors.delete(messageId);
+  ui.openReactionFor = "";
+  ui.reactionPulse = adding ? { messageId, label, until: Date.now() + 750 } : null;
+  PotonchuFeedback.play(adding, label);
+
+  if (!isFirebaseMode()) {
+    setLocalReaction(roomId, messageId, label, userId, adding);
+    render();
+    return;
+  }
+
+  const pending = { roomId, messageId, label, userId, adding };
+  backend.pendingReactions.set(key, pending);
+  setLocalReaction(roomId, messageId, label, userId, adding);
+  render();
+  try {
+    const { firestoreModule, db } = backend.firebase;
+    // Update only this label; simultaneous reactions from others are preserved.
+    await firestoreModule.updateDoc(
+      firestoreModule.doc(db, "rooms", roomId, "messages", messageId),
+      new firestoreModule.FieldPath("reactions", label),
+      adding ? firestoreModule.arrayUnion(userId) : firestoreModule.arrayRemove(userId),
+    );
+  } catch (error) {
+    if (appState.user?.id === userId) {
+      setLocalReaction(roomId, messageId, label, userId, wasActive);
+      const explanation = error.code === "permission-denied"
+        ? "リアクションを保存できませんでした。ルームの管理者に知らせてください。"
+        : "届きませんでした。もう一度押してみてください。";
+      backend.reactionErrors.set(messageId, explanation);
+      showToast(explanation);
+    }
+  } finally {
+    if (backend.pendingReactions.get(key) === pending) backend.pendingReactions.delete(key);
+    if (appState.user?.id === userId && ui.view === "chat") render();
+  }
+}
+
+function reactionKey(roomId, messageId, label) {
+  return JSON.stringify([roomId, messageId, label]);
+}
+
+function isReactionPending(roomId, messageId, label) {
+  return backend.pendingReactions.has(reactionKey(roomId, messageId, label));
+}
+
+function setLocalReaction(roomId, messageId, label, userId, adding) {
+  sharedState = normalizeSharedState({
+    ...sharedState,
+    rooms: sharedState.rooms.map((room) => room.id !== roomId ? room : {
+      ...room,
+      messages: room.messages.map((message) => message.id !== messageId ? message : {
+        ...message, reactions: reactionsWithChange(message.reactions, label, userId, adding),
+      }),
+    }),
+  });
+  if (!isFirebaseMode()) roomStore.save(sharedState);
+}
+
+function reactionsWithChange(reactions, label, userId, adding) {
+  const next = normalizeReactions(reactions);
+  const users = new Set(next[label] || []);
+  if (adding) users.add(userId);
+  else users.delete(userId);
+  next[label] = [...users];
+  return next;
+}
+
+function overlayPendingReactions(roomId, message) {
+  let reactions = message.reactions;
+  for (const pending of backend.pendingReactions.values()) {
+    if (pending.roomId === roomId && pending.messageId === message.id) {
+      reactions = reactionsWithChange(reactions, pending.label, pending.userId, pending.adding);
+    }
+  }
+  return { ...message, reactions };
+}
+
+async function saveFavorite(messageId) {
+  const room = currentRoom();
+  const message = room?.messages.find((item) => item.id === messageId);
+  if (!message) return;
+
+  appState.favorite = {
+    messageId: message.id,
+    roomId: room.id,
+    roomName: room.name,
+    topic: message.topic,
+    lines: message.lines,
+    authorName: message.author.name,
+    savedAt: Date.now(),
+  };
+  if (isFirebaseMode()) {
+    sharedState = normalizeSharedState({
+      ...sharedState,
+      favorites: { ...sharedState.favorites, [appState.user.id]: appState.favorite },
+    });
+    const { firestoreModule, db } = backend.firebase;
+    await firestoreModule.setDoc(
+      firestoreModule.doc(db, "users", appState.user.id),
+      {
+        favoritePoem: appState.favorite,
+        updatedAt: firestoreModule.serverTimestamp(),
+      },
+      { merge: true },
+    );
+  } else {
+    sharedState = roomStore.update((data) => {
+      data.favorites[appState.user.id] = appState.favorite;
+      return data;
+    });
+  }
+  render();
+  showToast("お気に入りの一首を置き換えました。");
+}
+
+async function handleProfilePhotoSelection(file) {
+  if (!file) return;
+  if (!file.type.startsWith("image/")) {
+    showToast("画像ファイルを選んでください。");
+    return;
+  }
+  try {
+    ui.pendingPhoto = await resizeImageToDataUrl(file, 180);
+    render();
+  } catch (error) {
+    showToast("写真を読み込めませんでした。");
+  }
+}
+
+async function saveProfilePhoto() {
+  if (!ui.pendingPhoto || !appState.user) return;
+  const updatedUser = normalizeUser({
+    ...appState.user,
+    customIconURL: ui.pendingPhoto,
+  });
+  if (isFirebaseMode()) {
+    const { firestoreModule, db } = backend.firebase;
+    await firestoreModule.setDoc(
+      firestoreModule.doc(db, "users", updatedUser.id),
+      {
+        displayName: updatedUser.name,
+        photoURL: updatedUser.photoURL || "",
+        customIconURL: updatedUser.customIconURL,
+        updatedAt: firestoreModule.serverTimestamp(),
+      },
+      { merge: true },
+    );
+    await updateSenderPhotoInJoinedRooms(updatedUser);
+  }
+  saveSessionUser(updatedUser);
+  updateLocalProfile(updatedUser);
+  ui.pendingPhoto = "";
+  render();
+  showToast("写真をアイコンにしました。");
+}
+
+async function enableNotifications() {
+  if (!appState.user) {
+    showToast("先にログインしてください。");
+    return;
+  }
+  if (!isFirebaseMode()) {
+    showToast("通知にはFirebase接続が必要です。");
+    return;
+  }
+  if (!canUseBrowserNotifications() || !backend.firebase.messagingModule || !backend.firebase.messaging) {
+    backend.notificationStatus = "このブラウザでは通知を使えない可能性があります。";
+    render();
+    return;
+  }
+
+  const vapidKey = getMessagingVapidKey();
+  if (!vapidKey) {
+    backend.notificationStatus = "Firebaseの通知用公開鍵を設定すると使えます。";
+    render();
+    showToast("通知用の公開鍵がまだ空です。");
+    return;
+  }
+
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") {
+    backend.notificationStatus = "通知が許可されていません。スマホ側の通知設定を確認してください。";
+    render();
+    return;
+  }
+
+  try {
+    const registration = await navigator.serviceWorker.register(FIREBASE_MESSAGING_SW_PATH, { scope: "./" });
+    backend.serviceWorkerRegistration = registration;
+    const token = await backend.firebase.messagingModule.getToken(backend.firebase.messaging, {
+      vapidKey,
+      serviceWorkerRegistration: registration,
+    });
+    if (!token) {
+      backend.notificationStatus = "通知の登録がまだ完了していません。少し後でもう一度試してください。";
+      render();
+      return;
+    }
+
+    await saveNotificationToken(token);
+    backend.notificationToken = token;
+    backend.notificationStatus = "この端末で通知を受け取れます。";
+    render();
+    showToast("通知を受け取れるようにしました。");
+  } catch (error) {
+    backend.notificationStatus = "通知の登録に失敗しました。Firebase設定を確認してください。";
+    render();
+    showToast("通知の登録に失敗しました。");
+  }
+}
+
+async function saveNotificationToken(token) {
+  const { firestoreModule, db } = backend.firebase;
+  const tokenId = tokenToDocId(token);
+  await firestoreModule.setDoc(
+    firestoreModule.doc(db, "users", appState.user.id, "notificationTokens", tokenId),
+    {
+      token,
+      userId: appState.user.id,
+      userName: appState.user.name,
+      roomIds: appState.rooms.map((room) => room.id),
+      userAgent: navigator.userAgent,
+      updatedAt: firestoreModule.serverTimestamp(),
+    },
+    { merge: true },
+  );
+}
+
+function setupForegroundNotifications() {
+  const messagingModule = backend.firebase?.messagingModule;
+  const messaging = backend.firebase?.messaging;
+  if (!messagingModule || !messaging) return;
+  messagingModule.onMessage(messaging, (payload) => {
+    const roomId = payload.data?.roomId || "";
+    const senderName = payload.data?.senderName || "誰か";
+    if (roomId && roomId !== appState.activeRoomId) showToast(`${senderName}さんから一首が届きました。`);
+    else showToast("新しい一首が届きました。");
+  });
+}
+
+function getMessagingVapidKey() {
+  const config = getFirebaseConfig();
+  return window.POTONCHU_FIREBASE_MESSAGING_VAPID_KEY || config.messagingVapidKey || "";
+}
+
+function tokenToDocId(token) {
+  return token.replaceAll("/", "_").replaceAll("+", "-").replaceAll("=", "");
+}
+
+async function updateSenderPhotoInJoinedRooms(user) {
+  if (!isFirebaseMode()) return;
+  const { firestoreModule, db } = backend.firebase;
+  await Promise.all(
+    sharedState.rooms.map((room) => {
+      const roomRef = firestoreModule.doc(db, "rooms", room.id);
+      const nextMembers = room.members.map((member) => (member.id === user.id ? user : member));
+      return firestoreModule.setDoc(
+        roomRef,
+        {
+          members: nextMembers,
+          updatedAt: firestoreModule.serverTimestamp(),
+        },
+        { merge: true },
+      );
+    }),
+  );
+}
+
+function updateLocalProfile(user) {
+  const normalized = normalizeUser(user);
+  sharedState = normalizeSharedState({
+    ...sharedState,
+    users: [...sharedState.users.filter((item) => item.id !== normalized.id), normalized],
+    rooms: sharedState.rooms.map((room) => ({
+      ...room,
+      members: room.members.map((member) => (member.id === normalized.id ? normalized : member)),
+      messages: room.messages.map((message) =>
+        message.author.id === normalized.id
+          ? {
+              ...message,
+              author: normalized,
+              senderPhoto: getAvatarImage(normalized) || normalized.icon,
+            }
+          : message,
+      ),
+    })),
+  });
+  if (backend.mode !== "firebase") roomStore.save(sharedState);
+  refreshAppState();
+}
+
+function resizeImageToDataUrl(file, size) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const image = new Image();
+      image.onload = () => {
+        const canvas = document.createElement("canvas");
+        const context = canvas.getContext("2d");
+        const side = Math.min(image.width, image.height);
+        const sx = (image.width - side) / 2;
+        const sy = (image.height - side) / 2;
+        canvas.width = size;
+        canvas.height = size;
+        context.drawImage(image, sx, sy, side, side, 0, 0, size, size);
+        resolve(canvas.toDataURL("image/jpeg", 0.82));
+      };
+      image.onerror = reject;
+      image.src = reader.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+const poemProvider = PotonchuPoems.createProvider(poemLibrary);
+const aiPoemQueues = new Map();
+let aiCallable = null;
+let aiUnavailableUntil = 0;
+
+async function generatePoem(topic, previousTemplateId, roomId) {
+  const config = window.POTONCHU_GENERATION_CONFIG || {};
+  if (config.enabled && isFirebaseMode() && appState.user && roomId && Date.now() >= aiUnavailableUntil) {
+    const key = JSON.stringify([appState.user.id, roomId, topic]);
+    let queue = aiPoemQueues.get(key) || [];
+    try {
+      if (!queue.length) {
+        if (!aiCallable) {
+          const functionsModule = await import(`https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}/firebase-functions.js`);
+          aiCallable = functionsModule.httpsCallable(
+            functionsModule.getFunctions(backend.firebase.app, config.region || "asia-northeast1"),
+            "generatePoems", { timeout: 12000 },
+          );
+        }
+        const result = await aiCallable({ topic, roomId, avoid: poemProvider.recent(topic) });
+        queue = Array.isArray(result.data?.poems) ? result.data.poems.slice(0, 3) : [];
+        if (aiPoemQueues.size >= 40) aiPoemQueues.delete(aiPoemQueues.keys().next().value);
+        aiPoemQueues.set(key, queue);
+      }
+      while (queue.length) {
+        const draft = poemProvider.accept(topic, queue.shift());
+        if (draft) return draft;
+      }
+    } catch (error) {
+      aiUnavailableUntil = Date.now() + 60000;
+    }
+  }
+  return poemProvider.generate(topic, previousTemplateId);
+}
+
+function completePoemLines(draft, selectedChoice) {
+  return draft.lines.map((line) => (line === BLANK ? selectedChoice : line));
+}
+
+function getYesterdayReflection(room) {
+  const yesterdayMessages = room.messages
+    .filter((message) => isYesterday(message.createdAt))
+    .sort((a, b) => b.createdAt - a.createdAt);
+  if (yesterdayMessages.length === 0) return null;
+  const message = yesterdayMessages[0];
+  const seed = Math.abs(Array.from(message.id).reduce((total, char) => total + char.charCodeAt(0), 0));
+  return {
+    message,
+    copy: reflectionCopies[seed % reflectionCopies.length],
+    question: reflectionQuestions[seed % reflectionQuestions.length],
+  };
+}
+
+function isYesterday(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return false;
+  const today = new Date();
+  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+  const startOfYesterday = startOfToday - 24 * 60 * 60 * 1000;
+  return date.getTime() >= startOfYesterday && date.getTime() < startOfToday;
+}
+
+function updateTopicCounter() {
+  const input = document.querySelector("#topicInput");
+  const countTarget = document.querySelector("#topicCount");
+  const counter = document.querySelector("#topicCounter");
+  const submit = document.querySelector("#topicSubmit");
+  if (!input || !countTarget || !counter || !submit) return;
+
+  const count = countChars(input.value.trim());
+  const remaining = 10 - count;
+  countTarget.textContent = remaining >= 0 ? `残り${remaining}字` : `${Math.abs(remaining)}字オーバー`;
+  counter.classList.toggle("is-over", remaining < 0);
+  submit.disabled = count === 0 || remaining < 0;
+}
+
+async function copyInvite(roomId) {
+  const room = findRoom(roomId);
+  if (!room) return;
+  await copyText(makeInviteLink(room.id));
+  showToast("招待リンクをコピーしました。");
+}
+
+function makeInviteLink(roomId) {
+  const url = new URL(window.location.href);
+  const room = findRoom(roomId);
+  url.searchParams.set("roomId", roomId);
+  if (room?.name) url.searchParams.set("roomName", room.name);
+  if (room?.type) url.searchParams.set("roomType", room.type);
+  url.hash = "";
+  return url.toString();
+}
+
+function makeRoomUrl(roomId) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("roomId", roomId);
+  url.hash = "";
+  return url.toString();
+}
+
+async function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch (error) {
+      // ローカル表示では使えない場合があるので、下の方法に戻します。
+    }
+  }
+
+  const helper = document.createElement("textarea");
+  helper.value = text;
+  helper.setAttribute("readonly", "");
+  helper.style.position = "fixed";
+  helper.style.left = "-9999px";
+  document.body.appendChild(helper);
+  helper.select();
+  document.execCommand("copy");
+  helper.remove();
+}
+
+function currentRoom() {
+  return findRoom(appState.activeRoomId);
+}
+
+function renderAvatar(user, className = "avatar", title = "") {
+  const image = getAvatarImage(user);
+  const titleAttribute = title ? ` title="${escapeAttribute(title)}"` : "";
+  if (image) return `<span class="${escapeAttribute(className)}"${titleAttribute}><img src="${escapeAttribute(image)}" alt="" /></span>`;
+  return `<span class="${escapeAttribute(className)}"${titleAttribute}>${escapeHtml(user?.icon || "ぽ")}</span>`;
+}
+
+function getAvatarImage(user) {
+  return user?.customIconURL || user?.photoURL || (isImageValue(user?.icon) ? user.icon : "");
+}
+
+function isImageValue(value) {
+  return typeof value === "string" && (value.startsWith("data:image/") || value.startsWith("http://") || value.startsWith("https://"));
+}
+
+function findRoom(roomId) {
+  return appState.rooms.find((room) => room.id === roomId);
+}
+
+function persistShared() {
+  sharedState = roomStore.save(sharedState);
+  refreshAppState();
+}
+
+function showToast(text) {
+  toast.textContent = text;
+  toast.classList.add("is-visible");
+  window.clearTimeout(showToast.timer);
+  showToast.timer = window.setTimeout(() => {
+    toast.classList.remove("is-visible");
+  }, 2300);
+}
+
+function makeId(prefix) {
+  if (crypto.randomUUID) return `${prefix}_${crypto.randomUUID()}`;
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function countChars(text) {
+  return Array.from(text).length;
+}
+
+function pickOne(items) {
+  return items[Math.floor(Math.random() * items.length)];
+}
+
+function shuffle(items) {
+  return [...items].sort(() => Math.random() - 0.5);
+}
+
+function formatDate(value) {
+  const millis = toMillis(value) || Date.now();
+  return new Intl.DateTimeFormat("ja-JP", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(millis);
+}
+
+function toMillis(value) {
+  if (!value) return 0;
+  if (typeof value === "number") return value;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value.toMillis === "function") return value.toMillis();
+  const parsed = new Date(value).getTime();
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function escapeHtml(text) {
+  return String(text)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function escapeAttribute(text) {
+  return escapeHtml(text).replaceAll("`", "&#096;");
+}
+
+app.addEventListener("click", handleClick);
+app.addEventListener("submit", handleSubmit);
+app.addEventListener("input", handleInput);
+app.addEventListener("compositionstart", (event) => {
+  if (event.target.id === "talkReplyInput") ui.talkComposing = true;
+});
+app.addEventListener("compositionend", (event) => {
+  if (event.target.id !== "talkReplyInput") return;
+  ui.talkComposing = false;
+  handleInput(event);
+  if (ui.talkRenderPending) {
+    ui.talkRenderPending = false;
+    render();
+  }
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && ui.openReactionFor) {
+    const messageId = ui.openReactionFor;
+    ui.openReactionFor = "";
+    render();
+    Array.from(app.querySelectorAll(".reaction-toggle")).find((button) => button.dataset.messageId === messageId)?.focus();
+  }
+});
+
+render();
+initBackend();
