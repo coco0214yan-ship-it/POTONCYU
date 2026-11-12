@@ -72,3 +72,21 @@ test("a draft cannot be sent to a different room after its recipient changes", a
   await app.run("ui.composer.selectedChoice = ui.composer.draft.choices[0]; ui.composer.step = 'confirm'; sendPoem()");
   assert.deepEqual(app.json("appState.rooms.map(r => r.messages.length)"), [0, 0]);
 });
+
+test("Enter and mobile send submit; Shift+Enter and Japanese conversion never submit", async () => {
+  const app = await harness();
+  app.run(`globalThis.sends = 0; globalThis.prevented = 0;
+    globalThis.key = (extra = {}) => handleChatEnter({type:"keydown", key:"Enter", target:{id:"chatInput", form:{requestSubmit(){ sends++; }}}, preventDefault(){ prevented++; }, ...extra});`);
+  app.run("key()");
+  assert.equal(app.run("sends"), 1);
+  app.run('key({type:"beforeinput", inputType:"insertLineBreak"})');
+  assert.equal(app.run("sends"), 2);
+  app.run('key({shiftKey:true}); key({type:"beforeinput",inputType:"insertLineBreak"})');
+  assert.equal(app.run("sends"), 2);
+  app.run('ui.chatNewlineRequested=false; key({isComposing:true}); key({keyCode:229}); ui.chatComposing=true; key(); ui.chatComposing=false; ui.chatCompositionEndedAt=Date.now(); key()');
+  assert.equal(app.run("sends"), 2);
+  app.run('ui.chatCompositionEndedAt=0; key({repeat:true}); key({key:"a"})');
+  assert.equal(app.run("sends"), 2);
+  app.run('key({type:"beforeinput",inputType:"insertParagraph"})');
+  assert.equal(app.run("sends"), 3);
+});

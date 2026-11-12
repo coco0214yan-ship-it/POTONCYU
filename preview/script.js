@@ -1315,11 +1315,12 @@ function renderChat() {
         </div>
         <label for="chatInput" class="chat-input-label">${isPoem ? "伝えたい思いやテーマ" : "おしゃべりのメッセージ"}</label>
         <div class="chat-input-row">
-          <textarea id="chatInput" name="message" rows="2" maxlength="${isPoem ? 200 : 500}" placeholder="${isPoem ? "例：助けてくれた友達に、ありがとうを伝えたい" : "一首から広がった話の続きを…"}">${escapeHtml(draft)}</textarea>
+          <textarea id="chatInput" name="message" rows="2" enterkeyhint="send" maxlength="${isPoem ? 200 : 500}" placeholder="${isPoem ? "例：助けてくれた友達に、ありがとうを伝えたい" : "一首から広がった話の続きを…"}">${escapeHtml(draft)}</textarea>
           <button type="submit" class="primary-button" id="chatSend">${isPoem ? "一首ガチャ" : "送信"}</button>
         </div>
         <p class="dock-note">${isPoem ? "入力した思いは送信されません。一首を選んでから届きます。" : "この文章をトークに送ります。一首の送信から12時間まで。"}</p>
         <span id="chatCount" class="chat-count">${countChars(draft)} / ${isPoem ? 200 : 500}</span>
+        <p class="keyboard-hint">Enterで${isPoem ? "ガチャを開始" : "送信"}・Shift＋Enterで改行。日本語変換の確定では送信しません。</p>
       </form>
       ${renderPreviewControls()}
     </section>
@@ -2310,8 +2311,8 @@ function upsertLocalMessage(roomId, message) {
     rooms: sharedState.rooms.map((room) => {
       if (room.id !== roomId) return room;
       const messages = [
-        message,
         ...room.messages.filter((item) => item.id !== message.id && (!message.clientId || item.clientId !== message.clientId)),
+        message,
       ].sort((a, b) => a.createdAt - b.createdAt);
       return { ...room, messages };
     }),
@@ -3017,12 +3018,34 @@ function renderPreviewControls() {
   </aside>`;
 }
 
+function handleChatEnter(event) {
+  const input = event.target;
+  if (input.id !== "chatInput") return;
+  const keyboard = event.type === "keydown";
+  const isEnter = keyboard ? event.key === "Enter" : ["insertLineBreak", "insertParagraph"].includes(event.inputType);
+  if (!isEnter) return;
+  if (keyboard) ui.chatNewlineRequested = Boolean(event.shiftKey);
+  if (event.shiftKey || (!keyboard && ui.chatNewlineRequested)) return;
+  // Some mobile keyboards only emit beforeinput; Safari may finish composition
+  // immediately before reporting the same Enter. Neither must confirm and send.
+  if (event.isComposing || ui.chatComposing || event.keyCode === 229
+    || Date.now() - (ui.chatCompositionEndedAt || 0) < 80) return;
+  event.preventDefault();
+  if (!event.repeat) input.form?.requestSubmit();
+}
+
+app.addEventListener("keydown", handleChatEnter);
+app.addEventListener("beforeinput", handleChatEnter);
+app.addEventListener("keyup", (event) => {
+  if (event.target.id === "chatInput") ui.chatNewlineRequested = false;
+});
 app.addEventListener("compositionstart", (event) => {
   if (event.target.id === "chatInput") ui.chatComposing = true;
 });
 app.addEventListener("compositionend", (event) => {
   if (event.target.id !== "chatInput") return;
   ui.chatComposing = false;
+  ui.chatCompositionEndedAt = Date.now();
   handleInput(event);
   if (ui.chatRenderPending) { ui.chatRenderPending = false; render(); }
 });
