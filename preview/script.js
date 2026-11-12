@@ -519,6 +519,12 @@ let appState = createAppState();
 let ui = {
   view: appState.user ? "home" : "login",
   topic: "",
+  chatDrafts: new Map(),
+  composeMode: "poem",
+  clockOffset: 0,
+  previewStartedAt: Date.now(),
+  lastReminderAt: 0,
+  reminderVisible: false,
   composer: null,
   createResultId: null,
   openReactionFor: "",
@@ -592,6 +598,8 @@ function normalizeMessage(message) {
   return {
     id: message.id || message.messageId || makeId("msg"),
     roomId: message.roomId || "",
+    kind: message.kind === "text" ? "text" : "poem",
+    text: typeof message.text === "string" ? message.text : "",
     topic: message.topic || "お題",
     lines: Array.isArray(message.lines) ? message.lines : Array.isArray(message.poemLines) ? message.poemLines : [],
     selectedWord: message.selectedWord || "",
@@ -931,6 +939,11 @@ function watchRoomMemberChanges(rooms) {
 }
 
 function render() {
+  const focusedChat = document.activeElement?.id === "chatInput" ? document.activeElement : null;
+  if (focusedChat && ui.chatComposing) { ui.chatRenderPending = true; return; }
+  const chatSelection = focusedChat ? [focusedChat.selectionStart, focusedChat.selectionEnd] : null;
+  const oldMessages = document.querySelector(".chat-shell .message-list");
+  const chatScroll = oldMessages ? { room: oldMessages.dataset.roomId, top: oldMessages.scrollTop, atEnd: oldMessages.scrollHeight - oldMessages.scrollTop - oldMessages.clientHeight < 60 } : null;
   if (ui.view === "talk" && ui.talkComposing) {
     ui.talkRenderPending = true;
     return;
@@ -954,6 +967,14 @@ function render() {
   if (ui.view === "talk") app.innerHTML = renderTalk();
   if (ui.view === "topic") app.innerHTML = renderTopic();
   if (ui.view === "gacha") app.innerHTML = renderGacha();
+  if (chatSelection && ui.view === "chat") {
+    const input = document.querySelector("#chatInput");
+    input?.focus({ preventScroll: true });
+    input?.setSelectionRange(...chatSelection);
+  }
+  const messageList = document.querySelector(".chat-shell .message-list");
+  if (messageList) messageList.scrollTop = !chatScroll || chatScroll.room !== appState.activeRoomId || chatScroll.atEnd || ui.scrollChatToEnd ? messageList.scrollHeight : chatScroll.top;
+  ui.scrollChatToEnd = false;
 
   const topicInput = document.querySelector("#topicInput");
   if (topicInput) {
@@ -1009,10 +1030,10 @@ function renderLogin() {
           <div class="brand-mark">ぽ</div>
           <div>
             <h1 class="brand-title">ぽとんちゅ</h1>
-            <p class="brand-subcopy">一首しか送れないチャット。</p>
+            <p class="brand-subcopy">一首から、会話がはじまる。</p>
           </div>
         </div>
-        <p class="login-copy">話したいことを10字で置いて、ことばを選んで、友達にぽとんと送る。一首から、会話がはじまる。</p>
+        <p class="login-copy">相手を選んで、伝えたい思いを一首に。ことばを選び、ぽとんと送ったら、おしゃべりの続きもここで。</p>
         <button type="button" class="google-button" data-action="google-login">
           <span class="google-dot" aria-hidden="true">${PREVIEW_MODE ? "ぽ" : "G"}</span>
           ${PREVIEW_MODE ? "プレビューをはじめる" : "Googleでログイン"}
@@ -1053,7 +1074,7 @@ function renderSetup() {
                 .join("")}
             </div>
           </div>
-          <button type="submit" class="primary-button">マイページへ</button>
+          <button type="submit" class="primary-button">トーク一覧へ</button>
         </form>
       </div>
     </section>
@@ -1064,18 +1085,21 @@ function renderHome() {
   return `
     <section class="screen">
       ${renderTopbar(`
-        <button type="button" class="create-button" data-action="go-create-room">新しいルームを作る</button>
+        <button type="button" class="create-button" data-action="go-create-room">新しいトーク</button>
         <button type="button" class="ghost-button" data-action="logout">ログアウト</button>
       `)}
       <div class="home-grid">
         <section class="panel">
           <div class="panel-header">
             <div>
-              <p class="eyebrow">rooms</p>
-              <h2>参加中のチャットルーム</h2>
+              <p class="eyebrow">talks</p>
+              <h2>トーク</h2>
+              <p class="small-note">一首を送りたい相手・グループを選んでね。</p>
             </div>
           </div>
           ${renderRoomList()}
+          <button type="button" class="ghost-button sample-rooms-button" data-action="sample-rooms">仮の相手・グループを追加して試す</button>
+          ${renderPreviewControls()}
         </section>
         <aside class="panel">
           ${renderProfileCard()}
@@ -1138,7 +1162,7 @@ function renderProfileCard() {
           <h3>スマホ通知</h3>
           <p class="small-note">${escapeHtml(backend.notificationStatus)}</p>
         </div>
-        <button type="button" class="copy-button" data-action="enable-notifications">通知を受け取る</button>
+        <p class="small-note">定期通知は未接続です。トークの「お試し時計」で通知の見本を確認できます。</p>
       </div>
     </div>
   `;
@@ -1148,8 +1172,8 @@ function renderRoomList() {
   if (appState.rooms.length === 0) {
     return `
       <div class="empty-state">
-        <p>まだルームがありません。</p>
-        <button type="button" class="primary-button" data-action="go-create-room">最初のルームを作る</button>
+        <p>まだトークがありません。</p>
+        <button type="button" class="primary-button" data-action="go-create-room">相手・グループのトークを作る</button>
       </div>
     `;
   }
@@ -1158,15 +1182,17 @@ function renderRoomList() {
     <div class="room-list">
       ${appState.rooms
         .slice()
-        .sort((a, b) => b.createdAt - a.createdAt)
+        .filter((room) => room.members.some((member) => member.id === appState.user.id))
+        .sort((a, b) => (b.messages.at(-1)?.createdAt || b.createdAt) - (a.messages.at(-1)?.createdAt || a.createdAt))
         .map(
           (room) => `
             <button type="button" class="room-item" data-action="open-room" data-room-id="${escapeAttribute(room.id)}">
-              <span>
+              ${renderAvatar({ icon: room.type === "group" ? "輪" : room.name.slice(0, 1) }, "avatar room-avatar")}
+              <span class="room-summary">
                 <strong>${escapeHtml(room.name)}</strong>
-                <span class="room-meta">${room.type === "group" ? "グループ" : "1対1"} ・ ${room.members.length}人 ・ ${room.messages.length}首 ・ ${formatDate(room.createdAt)}</span>
+                <span class="room-meta">${escapeHtml(room.messages.at(-1)?.kind === "text" ? room.messages.at(-1).text : room.messages.length ? "一首がぽとんと届きました" : "最初の一首を送ってみよう")}</span>
               </span>
-              <span class="room-kind">${getYesterdayReflection(room) ? "昨日のぽとん" : room.type === "group" ? "グループ" : "1対1"}</span>
+              <span class="room-kind">${room.type === "group" ? "グループ" : "1対1"}</span>
             </button>
           `,
         )
@@ -1252,6 +1278,11 @@ function renderChat() {
     return renderHome();
   }
 
+  const windowState = PotonchuChatRules.conversationWindow(room.messages, appState.user.id, previewNow());
+  if (!windowState.canTalk) ui.composeMode = "poem";
+  const isPoem = ui.composeMode !== "text";
+  const draft = ui.chatDrafts.get(`${room.id}:${ui.composeMode}`) || "";
+  const remaining = Math.max(0, Math.ceil((windowState.expiresAt - previewNow()) / 60000));
   return `
     <section class="screen chat-shell">
       <header class="chat-header">
@@ -1261,6 +1292,7 @@ function renderChat() {
           <h1>${escapeHtml(room.name)}</h1>
         </div>
         <div class="chat-tools">
+          <button type="button" class="copy-button" data-action="copy-invite" data-room-id="${escapeAttribute(room.id)}">招待</button>
           <label class="reaction-sound-toggle" title="リアクションの音を切り替える">
             <input type="checkbox" data-setting="reaction-sound" aria-label="リアクションの音" ${PotonchuFeedback.enabled ? "checked" : ""} />
             <span>音</span>
@@ -1271,16 +1303,25 @@ function renderChat() {
         </div>
       </header>
 
-      <section class="message-list" aria-label="一首チャット">
-        ${renderRoomStatus(room)}
-        ${renderReflectionCard(room)}
+      <section class="message-list" data-room-id="${escapeAttribute(room.id)}" aria-label="一首と会話のトーク" aria-live="polite">
+        <p class="chat-system-note">${windowState.canTalk ? `おしゃべりできる時間：あと${Math.floor(remaining / 60)}時間${remaining % 60}分。自分の一首を送ると12時間に戻ります。` : windowState.lastPoemAt ? "自分の一首から12時間たちました。次の一首で、またおしゃべりを。" : "まずは一首をぽとん。自分の一首から12時間、おしゃべりもできます。"}</p>
         ${renderMessages(room)}
       </section>
 
-      <section class="composer-dock">
-        <p class="dock-note">ここに届くのは、完成した一首だけ。</p>
-        <button type="button" class="primary-button" data-action="go-topic">一首をつくる</button>
-      </section>
+      <form class="composer-dock chat-composer" data-form="chat-composer">
+        <div class="compose-tabs" role="group" aria-label="送るものを選ぶ">
+          <button type="button" class="mini-button ${isPoem ? "is-selected" : ""}" data-action="compose-poem" aria-pressed="${isPoem}">一首をつくる</button>
+          <button type="button" class="mini-button ${!isPoem ? "is-selected" : ""}" data-action="compose-text" aria-pressed="${!isPoem}" ${windowState.canTalk ? "" : "disabled"}>おしゃべり${windowState.canTalk ? "" : " 🔒"}</button>
+        </div>
+        <label for="chatInput" class="chat-input-label">${isPoem ? "伝えたい思いやテーマ" : "おしゃべりのメッセージ"}</label>
+        <div class="chat-input-row">
+          <textarea id="chatInput" name="message" rows="2" maxlength="${isPoem ? 200 : 500}" placeholder="${isPoem ? "例：助けてくれた友達に、ありがとうを伝えたい" : "一首から広がった話の続きを…"}">${escapeHtml(draft)}</textarea>
+          <button type="submit" class="primary-button" id="chatSend">${isPoem ? "一首ガチャ" : "送信"}</button>
+        </div>
+        <p class="dock-note">${isPoem ? "入力した思いは送信されません。一首を選んでから届きます。" : "この文章をトークに送ります。一首の送信から12時間まで。"}</p>
+        <span id="chatCount" class="chat-count">${countChars(draft)} / ${isPoem ? 200 : 500}</span>
+      </form>
+      ${renderPreviewControls()}
     </section>
   `;
 }
@@ -1476,6 +1517,11 @@ function renderMessages(room) {
 
 function renderMessage(message, room) {
   const isMine = message.author.id === appState.user.id;
+  if (message.kind === "text") return `
+    <article class="message-row text-message ${isMine ? "is-mine" : ""}">
+      <div class="message-meta">${isMine ? "" : renderAvatar(message.author, "avatar small")}<span>${escapeHtml(message.author.name)} ・ ${formatDate(message.createdAt)}</span></div>
+      <div class="text-bubble">${escapeHtml(message.text)}</div>
+    </article>`;
   const statusText = message.status === "sending" ? " ・ 送信中" : message.status === "failed" ? " ・ 送れませんでした" : "";
   const canReact = !message.status;
   const reactionError = backend.reactionErrors.get(message.id);
@@ -1487,15 +1533,14 @@ function renderMessage(message, room) {
         <span>${escapeHtml(message.author.name)} ・ ${formatDate(message.createdAt)}${statusText}</span>
       </div>
       <div class="poem-bubble">
-        <button type="button" class="poem-open-talk" data-action="open-talk" data-message-id="${escapeAttribute(message.id)}" aria-label="${escapeAttribute(message.author.name)}さんの一首について話す" ${message.status ? "disabled" : ""}>
-        <span class="message-topic">${escapeHtml(message.topic)}</span>
+        <div class="poem-open-talk">
+        <span class="message-topic">ぽとんと一首</span>
         <span class="poem-lines">${message.lines.map((line) => `<span class="poem-line">${escapeHtml(line)}</span>`).join("")}</span>
-        </button>
+        </div>
         <div class="reaction-row" aria-label="ついているリアクション">${renderReactionSummary(message, room)}</div>
         ${pulse ? `<span class="reaction-pop" aria-hidden="true">${escapeHtml(pulse.label)}</span>` : ""}
         <div class="message-footer">
           <button type="button" class="mini-button" data-action="favorite-message" data-message-id="${escapeAttribute(message.id)}">お気に入りにする</button>
-          <button type="button" class="mini-button talk-toggle" data-action="open-talk" data-message-id="${escapeAttribute(message.id)}" ${message.status ? "disabled" : ""}>この一首のトーク</button>
           <button type="button" class="mini-button reaction-toggle" data-action="toggle-reaction-picker" data-message-id="${escapeAttribute(message.id)}" aria-expanded="${ui.openReactionFor === message.id}" aria-controls="reactions-${escapeAttribute(message.id)}" ${canReact ? "" : "disabled"}>＋ リアクション</button>
         </div>
         ${reactionError ? `<p class="reaction-error" role="status">${escapeHtml(reactionError)}</p>` : ""}
@@ -1615,6 +1660,7 @@ function renderGacha() {
             <div class="gacha-title">
               <p class="eyebrow">isshu gacha</p>
               <h1>一首ガチャ</h1>
+              <p class="small-note">AI未接続：思いのキーワードに合わせたお試しの一首を用意しています。</p>
             </div>
             <span class="topic-badge">${escapeHtml(composer.topic)}</span>
           </div>
@@ -1658,6 +1704,7 @@ function renderGacha() {
           <div class="gacha-title">
             <p class="eyebrow">isshu gacha</p>
             <h1>穴あき一首</h1>
+            <p class="small-note">AI未接続のお試し一首。真ん中の「5音」を4つから選んでね。</p>
           </div>
           <span class="topic-badge">${escapeHtml(composer.topic)}</span>
         </div>
@@ -1705,7 +1752,8 @@ function renderConfirm() {
         <div>
           <p class="eyebrow">send</p>
           <h1>この一首で送る？</h1>
-          <p class="confirm-copy">説明は足さず、一首だけ届きます。</p>
+          <p class="confirm-copy">${escapeHtml(currentRoom()?.name || "")}へ、この一首だけ届けます。</p>
+          <p class="small-note">5・7・5・7・7のお試し一首です。AI生成はまだ接続していません。</p>
         </div>
         <div class="poem-stage">
           <div class="poem-paper">
@@ -1761,6 +1809,37 @@ async function handleClick(event) {
   }
 
   const action = button.dataset.action;
+
+  if (action === "sample-rooms") {
+    const existing = appState.rooms.filter((room) => room.createdBy === appState.user.id);
+    for (const [name, type] of [["ともだち（お試し）", "pair"], ["放課後の会（お試し）", "group"]]) {
+      if (!existing.some((room) => room.name === name)) await createRoom(name, type);
+    }
+    ui.view = "home";
+    render();
+    showToast("仮のトークを追加しました。実在の相手には届きません。");
+    return;
+  }
+  if (action === "compose-poem" || action === "compose-text") {
+    if (action === "compose-text" && !PotonchuChatRules.conversationWindow(currentRoom()?.messages || [], appState.user.id, previewNow()).canTalk) {
+      showToast("先に一首を送ってね。"); return;
+    }
+    ui.composeMode = action === "compose-poem" ? "poem" : "text";
+    render();
+    document.querySelector("#chatInput")?.focus();
+    return;
+  }
+  if (action === "preview-time") {
+    ui.clockOffset += Number(button.dataset.hours) * PotonchuChatRules.HOUR;
+    checkPreviewReminder();
+    render();
+    return;
+  }
+  if (action === "dismiss-reminder") {
+    ui.reminderVisible = false;
+    render();
+    return;
+  }
 
   if (action === "open-talk") {
     openTalk(button.dataset.messageId);
@@ -1825,6 +1904,8 @@ async function handleClick(event) {
   if (action === "open-room") {
     await setActiveRoom(button.dataset.roomId);
     ui.view = "chat";
+    ui.composeMode = "poem";
+    ui.composer = null;
     render();
     return;
   }
@@ -1836,10 +1917,11 @@ async function handleClick(event) {
   }
 
   if (action === "go-topic") {
-    ui.view = "topic";
-    ui.topic = "";
+    ui.view = "chat";
+    ui.composeMode = "poem";
     ui.composer = null;
     render();
+    document.querySelector("#chatInput")?.focus();
     return;
   }
 
@@ -1926,6 +2008,28 @@ async function handleSubmit(event) {
   if (!form) return;
   event.preventDefault();
 
+  if (form.dataset.form === "chat-composer") {
+    const room = currentRoom();
+    const text = form.elements.namedItem("message").value.trim();
+    if (!room || !text) { showToast("思いやメッセージを入力してください。"); return; }
+    if (ui.composeMode === "poem") {
+      if (countChars(text) > 200) { showToast("思いは200字以内で入力してください。"); return; }
+      ui.topic = text;
+      spinGacha(text);
+    } else {
+      // Re-check at send time, including when a tab stays open past the deadline.
+      if (!PotonchuChatRules.conversationWindow(room.messages, appState.user.id, previewNow()).canTalk) {
+        ui.composeMode = "poem"; render(); showToast("12時間たちました。次の一首を送ってね。"); return;
+      }
+      if (countChars(text) > 500) { showToast("文章は500字以内です。"); return; }
+      upsertLocalMessage(room.id, { id: makeId("text"), roomId: room.id, kind: "text", text, author: appState.user, createdAt: previewNow() });
+      ui.chatDrafts.delete(`${room.id}:text`);
+      ui.scrollChatToEnd = true;
+      render();
+    }
+    return;
+  }
+
   if (form.dataset.form === "talk-reply") {
     const context = currentTalkContext();
     if (context) ui.talkDrafts.set(context.key, form.elements.namedItem("reply").value);
@@ -1987,6 +2091,12 @@ async function handleSubmit(event) {
 }
 
 function handleInput(event) {
+  if (event.target.id === "chatInput") {
+    ui.chatDrafts.set(`${appState.activeRoomId}:${ui.composeMode}`, event.target.value);
+    const counter = document.querySelector("#chatCount");
+    if (counter) counter.textContent = `${countChars(event.target.value)} / ${ui.composeMode === "poem" ? 200 : 500}`;
+    return;
+  }
   if (event.target.id === "talkReplyInput") {
     const context = currentTalkContext();
     if (!context) return;
@@ -2217,14 +2327,15 @@ async function setActiveRoom(roomId) {
 }
 
 async function spinGacha(topic, previousTemplateId = "") {
-  topic = PotonchuPoems.normalizeTopic(topic);
-  if (!topic || countChars(topic) > 10) {
-    showToast("お題は1〜10字で入れてください。");
+  topic = String(topic).trim();
+  if (!topic || countChars(topic) > 200) {
+    showToast("思いは1〜200字で入れてください。");
     return;
   }
   ui.view = "gacha";
   const composer = {
     topic,
+    roomId: appState.activeRoomId,
     step: "loading",
     draft: null,
     selectedChoice: "",
@@ -2244,7 +2355,7 @@ async function spinGacha(topic, previousTemplateId = "") {
     render();
   } catch (error) {
     if (ui.composer !== composer || ui.view !== "gacha") return;
-    ui.view = "topic";
+    ui.view = "chat";
     render();
     showToast("一首を用意できませんでした。もう一度まわしてみてください。");
   }
@@ -2274,13 +2385,14 @@ async function sendPoem() {
   const room = currentRoom();
   const composer = ui.composer;
   if (!room || !composer?.draft || composer.step !== "confirm" || !composer.draft.choices.includes(composer.selectedChoice)) return;
+  if (composer.roomId !== room.id) { showToast("送信先が変わりました。作り直してください。"); return; }
 
   const lines = completePoemLines(composer.draft, composer.selectedChoice);
   const clientId = makeId("client");
   const message = {
     id: makeId("pending"),
     roomId: room.id,
-    topic: composer.topic,
+    topic: "一首",
     lines,
     poemLines: lines,
     selectedWord: composer.selectedChoice,
@@ -2291,7 +2403,7 @@ async function sendPoem() {
     senderName: appState.user.name,
     senderPhoto: getAvatarImage(appState.user) || appState.user.icon,
     reactions: {},
-    createdAt: Date.now(),
+    createdAt: previewNow(),
   };
 
   if (isFirebaseMode()) {
@@ -2337,6 +2449,9 @@ async function sendPoem() {
     upsertLocalMessage(room.id, message);
   }
   await setActiveRoom(room.id);
+  ui.chatDrafts.delete(`${room.id}:poem`);
+  ui.composeMode = "text";
+  ui.scrollChatToEnd = true;
   ui.composer = null;
   ui.topic = "";
   ui.openReactionFor = "";
@@ -2674,11 +2789,13 @@ function resizeImageToDataUrl(file, size) {
 }
 
 const poemProvider = PotonchuPoems.createProvider(poemLibrary);
+const previewPoemGenerator = PotonchuChatRules.createGenerator();
 const aiPoemQueues = new Map();
 let aiCallable = null;
 let aiUnavailableUntil = 0;
 
 async function generatePoem(topic, previousTemplateId, roomId) {
+  if (PREVIEW_MODE) return previewPoemGenerator(topic);
   const config = window.POTONCHU_GENERATION_CONFIG || {};
   if (config.enabled && isFirebaseMode() && appState.user && roomId && Date.now() >= aiUnavailableUntil) {
     const key = JSON.stringify([appState.user.id, roomId, topic]);
@@ -2879,6 +2996,48 @@ function escapeHtml(text) {
 function escapeAttribute(text) {
   return escapeHtml(text).replaceAll("`", "&#096;");
 }
+
+function previewNow() { return Date.now() + ui.clockOffset; }
+
+function checkPreviewReminder() {
+  if (PotonchuChatRules.reminderDue(ui.previewStartedAt, ui.lastReminderAt, previewNow())) {
+    ui.lastReminderAt = previewNow();
+    ui.reminderVisible = true;
+  }
+}
+
+function renderPreviewControls() {
+  return `<aside class="preview-controls">
+    ${ui.reminderVisible ? `<div class="reminder-card" role="status"><strong>ぽとんちゅから、お知らせの見本</strong><p>今日の思いを、だれかに一首届けてみない？</p><button type="button" class="mini-button" data-action="dismiss-reminder">閉じる</button></div>` : ""}
+    <details><summary>お試し時計・通知の確認</summary>
+      <p>このタブの時計を進めて、12時間の制限と24時間ごとのお知らせを試せます。現在：${escapeHtml(new Date(previewNow()).toLocaleString("ja-JP"))}（${ui.clockOffset / PotonchuChatRules.HOUR}時間進めています）</p>
+      <div class="preview-clock-actions"><button type="button" class="mini-button" data-action="preview-time" data-hours="12">12時間進める</button><button type="button" class="mini-button" data-action="preview-time" data-hours="24">24時間進める</button></div>
+      <p>通知は画面内の見本です。サイトを閉じている間のプッシュ通知は、接続後に使えるようにします。会話はお試し用で、再読み込みすると失われる場合があります。</p>
+    </details>
+  </aside>`;
+}
+
+app.addEventListener("compositionstart", (event) => {
+  if (event.target.id === "chatInput") ui.chatComposing = true;
+});
+app.addEventListener("compositionend", (event) => {
+  if (event.target.id !== "chatInput") return;
+  ui.chatComposing = false;
+  handleInput(event);
+  if (ui.chatRenderPending) { ui.chatRenderPending = false; render(); }
+});
+// A suspended tab checks the real deadline again as soon as it becomes visible.
+function refreshPreviewClock() {
+  const wasReminderVisible = ui.reminderVisible;
+  checkPreviewReminder();
+  if (!appState.user || !["chat", "home"].includes(ui.view)) return;
+  const talkButton = app.querySelector('[data-action="compose-text"]');
+  const canTalk = PotonchuChatRules.conversationWindow(currentRoom()?.messages || [], appState.user.id, previewNow()).canTalk;
+  // Do not rebuild a focused composer just to tick a clock.
+  if (wasReminderVisible !== ui.reminderVisible || (talkButton && talkButton.disabled === canTalk)) render();
+}
+window.setInterval(refreshPreviewClock, 30000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshPreviewClock(); });
 
 app.addEventListener("click", handleClick);
 app.addEventListener("submit", handleSubmit);

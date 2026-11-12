@@ -22,3 +22,63 @@
 .preview-notice span {
   overflow-wrap: anywhere;
 }
+
+/* Keep the original colours, type, paper, buttons and gacha artwork. */
+.home-grid { grid-template-columns: minmax(0, 1.6fr) minmax(250px, 1fr); }
+.room-item { display: flex; align-items: center; gap: 14px; width: 100%; text-align: left; padding: 18px 14px; }
+.room-avatar { flex-shrink: 0; }
+.room-summary { flex: 1; min-width: 0; }
+.room-summary strong { display: block; }
+.room-summary .room-meta { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sample-rooms-button { margin-top: 20px; width: 100%; }
+.chat-shell { height: calc(100dvh - 110px); min-height: 550px; grid-template-rows: auto minmax(120px, 1fr) auto auto; gap: 8px; }
+body:has(.chat-shell) { display: flex; flex-direction: column; height: 100dvh; min-height: 0; overflow: hidden; }
+body:has(.chat-shell) .preview-notice { flex: 0 0 auto; }
+.app-shell:has(.chat-shell) { flex: 1 1 auto; min-height: 0; padding: 10px 0; }
+.app-shell .chat-shell { height: 100%; min-height: 0; grid-template-rows: auto minmax(70px, 1fr) auto auto; }
+.chat-shell .preview-controls details[open] { max-height: 180px; overflow-y: auto; }
+.chat-shell .message-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; align-content: start; scroll-padding-bottom: 20px; }
+.chat-system-note { color: var(--muted); font-size: 12px; text-align: center; margin: 0 0 12px; line-height: 1.8; }
+.chat-composer { display: block; margin: 0; padding: 12px 16px; position: relative; }
+.compose-tabs { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.compose-tabs .is-selected { background: var(--butter); border-color: var(--custard-deep); }
+.chat-input-label { display: block; font-size: 12px; color: var(--muted); margin: 0 0 6px; }
+.chat-input-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; }
+#chatInput { width: 100%; resize: vertical; min-height: 56px; max-height: 150px; padding: 12px 14px; border: 2px solid var(--line); border-radius: 18px; background: var(--milk); color: var(--ink); font: inherit; font-size: 16px; line-height: 1.6; }
+#chatInput:focus { outline: 3px solid var(--butter); border-color: var(--apricot); }
+#chatSend { padding: 12px 18px; min-height: 56px; margin-bottom: 5px; white-space: nowrap; }
+.chat-composer .dock-note { font-size: 11px; padding: 12px 70px 0 0; }
+.chat-count { position: absolute; right: 16px; bottom: 12px; font-size: 11px; color: var(--muted); }
+.text-bubble { max-width: min(80%, 560px); border: 1px solid var(--line); border-radius: 18px; padding: 12px 16px; background: var(--milk); line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
+.is-mine .text-bubble { background: var(--mint); border-bottom-right-radius: 4px; }
+.text-message.is-mine .text-bubble, .text-message.is-mine .message-meta { justify-self: end; }
+.text-message:not(.is-mine) .text-bubble { border-bottom-left-radius: 4px; }
+.text-message { gap: 4px; }
+.preview-controls { font-size: 11px; line-height: 1.8; color: var(--muted); }
+.preview-controls details { border-top: 1px dashed var(--line); padding: 8px 4px; }
+.preview-controls summary { cursor: pointer; }
+.preview-clock-actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 10px 0; }
+.reminder-card { padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--butter); color: var(--ink); }
+.topic-badge { max-width: min(100%, 360px); overflow-wrap: anywhere; white-space: normal; }
+.gacha-head .small-note { max-width: 360px; }
+.chat-header h1 { overflow-wrap: anywhere; }
+.chat-header > div { min-width: 0; }
+@media (max-width: 720px) {
+  .home-grid { grid-template-columns: minmax(0, 1fr); }
+  .chat-shell { height: calc(100dvh - 130px); min-height: 520px; }
+  .chat-header { grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px; padding: 10px 8px; }
+  .chat-header h1 { font-size: 17px; }
+  .chat-header .participant-stack { display: none; }
+  .chat-tools { gap: 6px; }
+  .chat-shell .message-list { padding: 12px 8px; }
+  .chat-composer { padding: 10px; }
+  .chat-input-row { gap: 6px; }
+  #chatSend { padding: 10px; font-size: 13px; }
+  .text-bubble { max-width: 88%; }
+  .room-item { gap: 10px; }
+  .room-kind { font-size: 10px; }
+  .chat-header .eyebrow { font-size: 9px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
