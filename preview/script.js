@@ -518,6 +518,7 @@ let sharedState = roomStore.load();
 let appState = createAppState();
 let ui = {
   view: appState.user ? "home" : "login",
+  mainTab: "talks",
   topic: "",
   chatDrafts: new Map(),
   composeMode: "poem",
@@ -967,6 +968,7 @@ function render() {
   if (ui.view === "talk") app.innerHTML = renderTalk();
   if (ui.view === "topic") app.innerHTML = renderTopic();
   if (ui.view === "gacha") app.innerHTML = renderGacha();
+  if (appState.user && !["login", "setup"].includes(ui.view)) app.innerHTML += renderBottomNav();
   if (chatSelection && ui.view === "chat") {
     const input = document.querySelector("#chatInput");
     input?.focus({ preventScroll: true });
@@ -1082,14 +1084,15 @@ function renderSetup() {
 }
 
 function renderHome() {
+  const tab = ui.mainTab || "talks";
   return `
-    <section class="screen">
+    <section class="screen main-tab-screen" aria-label="${tab === "profile" ? "ホーム" : tab === "favorites" ? "おきにいり" : "トーク一覧"}">
       ${renderTopbar(`
-        <button type="button" class="create-button" data-action="go-create-room">新しいトーク</button>
-        <button type="button" class="ghost-button" data-action="logout">ログアウト</button>
+        ${tab === "talks" ? '<button type="button" class="create-button" data-action="go-create-room">新しいトーク</button>' : ""}
+        ${tab === "profile" ? '<button type="button" class="ghost-button" data-action="logout">ログアウト</button>' : ""}
       `)}
-      <div class="home-grid">
-        <section class="panel">
+      <div class="main-tab-content">
+        ${tab === "talks" ? `<section class="panel">
           <div class="panel-header">
             <div>
               <p class="eyebrow">talks</p>
@@ -1100,20 +1103,29 @@ function renderHome() {
           ${renderRoomList()}
           <button type="button" class="ghost-button sample-rooms-button" data-action="sample-rooms">仮の相手・グループを追加して試す</button>
           ${renderPreviewControls()}
-        </section>
-        <aside class="panel">
-          ${renderProfileCard()}
+        </section>` : tab === "profile" ? `<section class="panel">${renderProfileCard()}</section>` : `<section class="panel">
           <div class="panel-header">
             <div>
               <p class="eyebrow">favorite</p>
-              <h2>お気に入りの一首</h2>
+              <h2>おきにいり</h2>
+              <p class="small-note">心に残った一首を、ここにまとめて。</p>
             </div>
           </div>
           ${renderFavorite()}
-        </aside>
+        </section>`}
       </div>
     </section>
   `;
+}
+
+function renderBottomNav() {
+  const active = ui.view === "home" ? ui.mainTab || "talks" : "talks";
+  const icons = {
+    profile: '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/>',
+    talks: '<path d="M21 11a8 8 0 0 1-8 8H7l-5 3 2-6a8 8 0 1 1 17-5Z"/><path d="M8 10h8M8 14h5"/>',
+    favorites: '<path d="m12 3 3 6 7 1-5 5 1 7-6-3-6 3 1-7-5-5 7-1z"/>',
+  };
+  return `<nav class="bottom-nav" aria-label="メインメニュー">${[["profile", "ホーム"], ["talks", "トーク"], ["favorites", "おきにいり"]].map(([tab, label]) => `<button type="button" data-action="switch-tab" data-tab="${tab}" ${tab === active ? 'aria-current="page"' : ""}><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${icons[tab]}</svg><span>${label}</span></button>`).join("")}</nav>`;
 }
 
 function renderTopbar(actions = "") {
@@ -1156,6 +1168,10 @@ function renderProfileCard() {
         </div>
       </div>
       <p class="small-note">写真は丸いアイコンとして表示されます。</p>
+      <form class="profile-name-form" data-form="profile-name">
+        <label class="field-label" for="profileName">ユーザー名</label>
+        <div class="profile-name-row"><input id="profileName" name="profileName" maxlength="12" value="${escapeAttribute(user.name)}" autocomplete="nickname" /><button type="submit" class="copy-button">名前を保存</button></div>
+      </form>
       <div class="notification-box">
         <div>
           <p class="eyebrow">notification</p>
@@ -1202,29 +1218,34 @@ function renderRoomList() {
 }
 
 function renderFavorite() {
-  const favorite = appState.favorite;
-  if (!favorite) {
+  const favorites = getFavorites();
+  if (!favorites.length) {
     return `
       <div class="favorite-box">
-        <p class="favorite-empty">今の気持ちに残しておく一首を、1つだけ。</p>
+        <p class="favorite-empty">まだお気に入りの一首はありません。トークの「お気に入りにする」で追加できます。</p>
       </div>
     `;
   }
 
-  return `
-    <div class="favorite-box">
+  return `<div class="favorites-list">${favorites.map((favorite) => `
+    <article class="favorite-box">
       <div class="favorite-meta">${escapeHtml(favorite.roomName)} ・ ${escapeHtml(favorite.topic)}</div>
       ${renderPoemLines(favorite.lines)}
       <div class="favorite-meta">${formatDate(favorite.savedAt)}に保存</div>
-    </div>
-  `;
+      <button type="button" class="mini-button" data-action="remove-favorite" data-room-id="${escapeAttribute(favorite.roomId)}" data-message-id="${escapeAttribute(favorite.messageId)}">お気に入りから外す</button>
+    </article>`).join("")}</div>`;
+}
+
+function getFavorites() {
+  const value = sharedState.favorites[appState.user?.id];
+  return Array.isArray(value) ? value : value ? [value] : [];
 }
 
 function renderCreateRoom() {
   const createdRoom = ui.createResultId ? findRoom(ui.createResultId) : null;
   return `
     <section class="screen room-create-screen">
-      ${renderTopbar(`<button type="button" class="back-button" data-action="go-home">マイページへ</button>`)}
+      ${renderTopbar(`<button type="button" class="back-button" data-action="go-home">トーク一覧へ</button>`)}
       <div class="panel">
         <div class="page-title">
           <p class="eyebrow">new room</p>
@@ -1265,7 +1286,7 @@ function renderCreatedRoom(room) {
       <div class="gacha-actions">
         <button type="button" class="copy-button" data-action="copy-invite" data-room-id="${escapeAttribute(room.id)}">招待リンクをコピー</button>
         <button type="button" class="primary-button" data-action="open-room" data-room-id="${escapeAttribute(room.id)}">チャットを開く</button>
-        <button type="button" class="ghost-button" data-action="go-home">マイページへ</button>
+        <button type="button" class="ghost-button" data-action="go-home">トーク一覧へ</button>
       </div>
     </div>
   `;
@@ -1811,6 +1832,27 @@ async function handleClick(event) {
 
   const action = button.dataset.action;
 
+  if (action === "switch-tab") {
+    if (!["profile", "talks", "favorites"].includes(button.dataset.tab)) return;
+    stopTalkSubscription();
+    ui.mainTab = button.dataset.tab;
+    ui.view = "home";
+    ui.composer = null;
+    ui.openReactionFor = "";
+    ui.chatComposing = false;
+    ui.talkComposing = false;
+    render();
+    window.scrollTo?.(0, 0);
+    return;
+  }
+  if (action === "remove-favorite") {
+    const keep = getFavorites().filter((item) => item.roomId !== button.dataset.roomId || item.messageId !== button.dataset.messageId);
+    sharedState = roomStore.update((data) => { data.favorites[appState.user.id] = keep; return data; });
+    render();
+    showToast("お気に入りから外しました。");
+    return;
+  }
+
   if (action === "sample-rooms") {
     const existing = appState.rooms.filter((room) => room.createdBy === appState.user.id);
     for (const [name, type] of [["ともだち（お試し）", "pair"], ["放課後の会（お試し）", "group"]]) {
@@ -1887,6 +1929,7 @@ async function handleClick(event) {
   }
 
   if (action === "go-home") {
+    ui.mainTab = "talks";
     stopTalkSubscription();
     ui.talkComposing = false;
     ui.view = "home";
@@ -2008,6 +2051,17 @@ async function handleSubmit(event) {
   const form = event.target.closest("[data-form]");
   if (!form) return;
   event.preventDefault();
+
+  if (form.dataset.form === "profile-name") {
+    const name = form.elements.namedItem("profileName").value.trim();
+    if (!name || countChars(name) > 12) { showToast("名前は1〜12字で入力してください。"); return; }
+    const updated = normalizeUser({ ...appState.user, name });
+    saveSessionUser(updated);
+    updateLocalProfile(updated);
+    render();
+    showToast("名前を保存しました。");
+    return;
+  }
 
   if (form.dataset.form === "chat-composer") {
     const room = currentRoom();
@@ -2555,6 +2609,17 @@ async function saveFavorite(messageId) {
   const room = currentRoom();
   const message = room?.messages.find((item) => item.id === messageId);
   if (!message) return;
+
+  if (PREVIEW_MODE) {
+    if (message.kind === "text") return;
+    const favorites = getFavorites();
+    if (favorites.some((item) => item.roomId === room.id && item.messageId === message.id)) { showToast("この一首は追加済みです。"); return; }
+    const favorite = { messageId: message.id, roomId: room.id, roomName: room.name, topic: message.topic, lines: [...message.lines], authorName: message.author.name, savedAt: Date.now() };
+    sharedState = roomStore.update((data) => { data.favorites[appState.user.id] = [favorite, ...favorites]; return data; });
+    render();
+    showToast("お気に入りに追加しました。");
+    return;
+  }
 
   appState.favorite = {
     messageId: message.id,

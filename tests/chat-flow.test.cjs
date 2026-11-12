@@ -90,3 +90,22 @@ test("Enter and mobile send submit; Shift+Enter and Japanese conversion never su
   app.run('key({type:"beforeinput",inputType:"insertParagraph"})');
   assert.equal(app.run("sends"), 3);
 });
+
+test("favorites keep multiple poems, reject duplicates, and remove only the selected poem", async () => {
+  const app = await harness();
+  app.run(`upsertLocalMessage(currentRoom().id, {id:"one", lines:["一","二","三","四","五"],author:{id:"me"}});
+    upsertLocalMessage(currentRoom().id, {id:"two", lines:["六","七","八","九","十"],author:{id:"me"}});`);
+  await app.run('saveFavorite("one"); saveFavorite("two"); saveFavorite("one")');
+  assert.deepEqual(app.json("getFavorites().map(f => f.messageId)"), ["two", "one"]);
+  await app.run(`handleClick({target:{closest:()=>({dataset:{action:"remove-favorite",roomId:currentRoom().id,messageId:"one"}})}})`);
+  assert.deepEqual(app.json("getFavorites().map(f => f.messageId)"), ["two"]);
+  app.run('saveSessionUser({id:"someone-else",name:"別の人"}); refreshAppState()');
+  assert.equal(app.run("getFavorites().length"), 0);
+});
+
+test("profile name edits update the session and the room membership", async () => {
+  const app = await harness();
+  await app.run(`handleSubmit({preventDefault(){},target:{closest:()=>({dataset:{form:"profile-name"},elements:{namedItem:()=>({value:"新しい名前"})}})}})`);
+  assert.equal(app.run("appState.user.name"), "新しい名前");
+  assert.equal(app.run("currentRoom().members[0].name"), "新しい名前");
+});
