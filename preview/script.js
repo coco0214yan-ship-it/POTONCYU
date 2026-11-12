@@ -1521,13 +1521,7 @@ function renderRoomStatus(room) {
 
 function renderMessages(room) {
   if (room.messages.length === 0) {
-    return `
-      <div class="empty-state">
-        <p>まだ一首は届いていません。</p>
-        <button type="button" class="primary-button" data-action="go-topic">一首をつくる</button>
-        <button type="button" class="copy-button" data-action="copy-invite" data-room-id="${escapeAttribute(room.id)}">招待リンクをコピー</button>
-      </div>
-    `;
+    return "";
   }
 
   return room.messages
