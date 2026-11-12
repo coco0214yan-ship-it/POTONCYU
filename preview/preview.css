@@ -107,6 +107,8 @@ body:has(.chat-shell) .preview-notice { flex: 0 0 auto; }
   .chat-shell { height: calc(100dvh - 130px); min-height: 520px; }
   .chat-header { grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px; padding: 10px 8px; }
   .chat-header h1 { font-size: 17px; }
+  .chat-shell .chat-header .back-button,
+  .chat-shell .chat-header .copy-button { font-size: 12px; padding: 8px 10px; }
   .chat-header .participant-stack { display: none; }
   .chat-tools { gap: 6px; }
   .chat-shell .message-list { padding: 12px 8px; }
