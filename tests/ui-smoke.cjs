@@ -21,7 +21,7 @@ async function main() {
     } catch (error) { response.writeHead(404).end(); }
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const url = `http://127.0.0.1:${server.address().port}/`;
+  const url = `http://127.0.0.1:${server.address().port}/?demo=1`;
   let browser;
   try {
     try { browser = await chromium.launch({ headless: true }); }
@@ -47,11 +47,9 @@ async function main() {
     await b.locator("#setupName").fill("ためす人B");
     await b.locator('[data-form="setup"] button[type="submit"]').click();
     await b.locator(".chat-header").waitFor();
-    await a.locator('.composer-dock [data-action="go-topic"]').click();
-    await a.locator("#topicInput").fill("あいうえおかきくけこさ");
-    assert.equal(await a.locator("#topicSubmit").isDisabled(), true);
-    await a.locator("#topicInput").fill("テストやばい");
-    await a.locator("#topicSubmit").click();
+    assert.equal(await a.locator('[data-action="compose-text"]').isDisabled(), true);
+    await a.locator("#chatInput").fill("テスト前で不安だから、友達に励ましてほしい");
+    await a.locator("#chatInput").press("Enter");
     await a.locator(".choice-grid").waitFor();
     assert.equal(await a.locator(".choice-button").count(), 4);
     const first = await a.locator(".poem-paper").innerText();
@@ -68,6 +66,13 @@ async function main() {
     await a.locator('[data-action="send-poem"]').click();
     await a.locator(".message-row.is-mine").waitFor();
     await b.locator(".message-row:not(.is-mine)").waitFor();
+    await a.locator("#chatInput").fill("一首の続きの話をしよう");
+    await a.locator("#chatInput").press("Enter");
+    await b.locator(".text-bubble").filter({hasText:"一首の続きの話をしよう"}).waitFor();
+    await a.locator('[data-action="favorite-message"]').click();
+    await a.locator('.bottom-nav [data-tab="favorites"]').click();
+    await a.locator(".favorite-box .poem-lines").waitFor();
+    assert.equal(await a.locator(".bottom-nav button").count(),3);
     await b.setViewportSize({ width: 390, height: 844 });
     await b.locator(".reaction-toggle").click();
     await b.screenshot({ path: path.join(root, ".qa-output/reactions-mobile.png"), fullPage: true });

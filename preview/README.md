@@ -27,7 +27,7 @@ URL: https://coco0214yan-ship-it.github.io/POTONCYU/preview/
 
 AIを有効にする際は、長い思いの入力・読み仮名による音数検証・真ん中の4択に対応する生成APIが必要です。本番化では12時間の送信制限をサーバー側でも確認し、24時間ごとの通知にはサーバーの定期実行と端末の通知許可を用意します。これらは未接続・未公開です。
 
-公開版の保存キー・同期チャンネルとは分離しています。元の公開版は変更していません。
+公開版の保存キー・同期チャンネルとは分離しています。2026-11-15に改善した画面と操作を本番にも取り込みました。プレビューは引き続き、ログイン・通信を行わない独立したお試し版です。
 
 ## PC内で開く
 
@@ -41,7 +41,7 @@ node preview/server.cjs
 
 ## 更新と確認
 
-`preview/` は本番から独立しています。`node scripts/build-preview.cjs` は必要ファイルの存在確認だけを行い、本番ファイルで上書きしません。更新時は `preview/index.html` のバージョンも変えます。本番のHTML・JavaScript・Firebase設定は変更しません。
+`preview/` は本番から独立しています。`node scripts/build-preview.cjs` は必要ファイルの存在確認だけを行い、本番ファイルで上書きしません。今後プレビューを更新するときも、本番への反映は別途ユーザーの依頼があってから行います。
 
 ```powershell
 node --test tests/chat-rules.test.cjs tests/poem-engine.test.cjs tests/reactions.test.cjs tests/ai-generation.test.cjs

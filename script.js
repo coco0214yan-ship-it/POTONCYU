@@ -1,11 +1,14 @@
 const app = document.querySelector("#app");
 const toast = document.querySelector("#toast");
 
-const LEGACY_STORAGE_KEY = "potonchu.prototype.v1";
-const SHARED_STORAGE_KEY = "potonchu.shared.v2";
-const SESSION_USER_KEY = "potonchu.sessionUser.v1";
-const ACTIVE_ROOM_KEY = "potonchu.activeRoomId";
-const HISTORY_RESET_KEY = "potonchu.historyReset.v5";
+const PREVIEW_MODE = window.POTONCHU_PREVIEW === true;
+const LOCAL_DEMO_MODE = ["127.0.0.1", "localhost"].includes(window.location.hostname) && new URLSearchParams(window.location.search).get("demo") === "1";
+const STORAGE_PREFIX = PREVIEW_MODE ? "potonchu.preview" : "potonchu";
+const LEGACY_STORAGE_KEY = `${STORAGE_PREFIX}.prototype.v1`;
+const SHARED_STORAGE_KEY = `${STORAGE_PREFIX}.shared.v2`;
+const SESSION_USER_KEY = `${STORAGE_PREFIX}.sessionUser.v1`;
+const ACTIVE_ROOM_KEY = `${STORAGE_PREFIX}.activeRoomId`;
+const HISTORY_RESET_KEY = `${STORAGE_PREFIX}.historyReset.v5`;
 const FIREBASE_SDK_VERSION = "12.15.0";
 const FIREBASE_MESSAGING_SW_PATH = "./firebase-messaging-sw.js";
 const BLANK = "__POTON_BLANK__";
@@ -472,17 +475,22 @@ const poemLibrary = [
 
 clearLegacyHistory();
 
-const roomChannel = "BroadcastChannel" in window ? new BroadcastChannel("potonchu-room-sync-v3") : null;
+const roomChannel = "BroadcastChannel" in window ? new BroadcastChannel(PREVIEW_MODE ? "potonchu-preview-room-sync-v3" : "potonchu-room-sync-v3") : null;
 const backend = {
   mode: "demo",
   ready: false,
-  status: "Firebase未設定です。同じPCの別タブだけで試せます。",
+  status: PREVIEW_MODE ? "Googleログインなしで、お試しの名前ではじめられます。" : "Firebase未設定です。同じPCの別タブだけで試せます。",
   firebase: null,
   roomUnsubscribe: null,
   messageUnsubscribes: new Map(),
   messageErrors: new Map(),
   pendingReactions: new Map(),
   reactionErrors: new Map(),
+  talkUnsubscribe: null,
+  talkSubscriptionKey: "",
+  talkStatus: new Map(),
+  talkSending: new Set(),
+  chatSending: new Set(),
   seenMemberIds: new Map(),
   notificationStatus: "通知はまだ設定されていません。",
   notificationToken: "",
@@ -512,11 +520,22 @@ let sharedState = roomStore.load();
 let appState = createAppState();
 let ui = {
   view: appState.user ? "home" : "login",
+  mainTab: "talks",
   topic: "",
+  chatDrafts: new Map(),
+  composeMode: "poem",
+  clockOffset: 0,
+  previewStartedAt: Date.now(),
+  lastReminderAt: 0,
+  reminderVisible: false,
   composer: null,
   createResultId: null,
   openReactionFor: "",
   reactionPulse: null,
+  talkMessageId: "",
+  talkDrafts: new Map(),
+  talkComposing: false,
+  talkRenderPending: false,
   pendingPhoto: "",
   firebaseNoticeDismissed: false,
   pendingInviteRoomId: new URLSearchParams(window.location.search).get("roomId"),
@@ -531,6 +550,7 @@ function createSharedState() {
     users: [],
     rooms: [],
     favorites: {},
+    talks: {},
     updatedAt: Date.now(),
   };
 }
@@ -553,6 +573,7 @@ function normalizeSharedState(data) {
     users: Array.isArray(data?.users) ? data.users.map(normalizeUser) : [],
     rooms: Array.isArray(data?.rooms) ? data.rooms.map(normalizeRoom) : [],
     favorites: data?.favorites && typeof data.favorites === "object" ? data.favorites : {},
+    talks: Object.fromEntries(Object.entries(data?.talks || {}).map(([key, replies]) => [key, Array.isArray(replies) ? replies.map(normalizeTalkReply) : []])),
     updatedAt: Number(data?.updatedAt) || Date.now(),
   };
 }
@@ -580,6 +601,8 @@ function normalizeMessage(message) {
   return {
     id: message.id || message.messageId || makeId("msg"),
     roomId: message.roomId || "",
+    kind: message.kind === "text" ? "text" : "poem",
+    text: typeof message.text === "string" ? message.text : "",
     topic: message.topic || "お題",
     lines: Array.isArray(message.lines) ? message.lines : Array.isArray(message.poemLines) ? message.poemLines : [],
     selectedWord: message.selectedWord || "",
@@ -605,6 +628,16 @@ function normalizeUser(user) {
     customIconURL,
     provider: user?.provider || "google-mock",
     createdAt: user?.createdAt || Date.now(),
+  };
+}
+
+function normalizeTalkReply(reply) {
+  return {
+    id: reply.id || makeId("reply"),
+    text: typeof reply.text === "string" ? reply.text : "",
+    author: normalizeUser(reply.author || { id: reply.senderId, name: reply.senderName, photoURL: reply.senderPhoto }),
+    createdAt: toMillis(reply.createdAt) || reply.createdAtMillis || Date.now(),
+    status: reply.status || "",
   };
 }
 
@@ -645,6 +678,9 @@ function clearSessionUser() {
 }
 
 function getFirebaseConfig() {
+  if (PREVIEW_MODE) return {};
+  if (["127.0.0.1", "localhost"].includes(window.location.hostname)
+    && new URLSearchParams(window.location.search).get("demo") === "1") return {};
   return window.POTONCHU_FIREBASE_CONFIG || {};
 }
 
@@ -696,10 +732,10 @@ async function initBackend() {
       const user = await loadFirebaseUser(firebaseUser);
       saveSessionUser(user);
       upsertLocalUser(user);
-      if (user.favoritePoem) {
+      if (user.favoritePoems) {
         sharedState = normalizeSharedState({
           ...sharedState,
-          favorites: { ...sharedState.favorites, [user.id]: user.favoritePoem },
+          favorites: { ...sharedState.favorites, [user.id]: user.favoritePoems },
         });
       }
       subscribeFirebaseRooms(user.id);
@@ -765,6 +801,7 @@ async function loadFirebaseUser(firebaseUser) {
     createdAt: toMillis(saved.createdAt) || Date.now(),
   });
   user.favoritePoem = saved.favoritePoem || null;
+  user.favoritePoems = Array.isArray(saved.favoritePoems) ? saved.favoritePoems : saved.favoritePoem ? [saved.favoritePoem] : [];
   await firestoreModule.setDoc(
     userRef,
     {
@@ -786,6 +823,11 @@ function cleanupFirebaseSubscriptions() {
   backend.seenMemberIds.clear();
   backend.pendingReactions.clear();
   backend.reactionErrors.clear();
+  stopTalkSubscription();
+  backend.talkStatus.clear();
+  backend.talkSending.clear();
+  backend.chatSending.clear();
+  ui.talkDrafts.clear();
   aiPoemQueues.clear();
 }
 
@@ -842,7 +884,7 @@ function subscribeFirebaseMessages(roomId) {
           room.id === roomId ? { ...room, messages: [...messages, ...pendingMessages].sort((a, b) => a.createdAt - b.createdAt) } : room,
         ),
       });
-      if (["home", "chat"].includes(ui.view)) render();
+      if (["home", "chat", "talk"].includes(ui.view)) render();
     },
     (error) => {
       backend.messageErrors.set(roomId, error.code || error.message || "unknown");
@@ -872,6 +914,8 @@ function normalizeFirebaseMessage(roomId, messageDoc) {
   return normalizeMessage({
     id: messageDoc.id,
     roomId,
+    kind: data.kind,
+    text: data.text,
     topic: data.topic,
     lines: data.poemLines,
     poemLines: data.poemLines,
@@ -902,6 +946,20 @@ function watchRoomMemberChanges(rooms) {
 }
 
 function render() {
+  const focusedChat = document.activeElement?.id === "chatInput" ? document.activeElement : null;
+  if (focusedChat && ui.chatComposing) { ui.chatRenderPending = true; return; }
+  const chatSelection = focusedChat ? [focusedChat.selectionStart, focusedChat.selectionEnd] : null;
+  const oldMessages = document.querySelector(".chat-shell .message-list");
+  const chatScroll = oldMessages ? { room: oldMessages.dataset.roomId, top: oldMessages.scrollTop, atEnd: oldMessages.scrollHeight - oldMessages.scrollTop - oldMessages.clientHeight < 60 } : null;
+  if (ui.view === "talk" && ui.talkComposing) {
+    ui.talkRenderPending = true;
+    return;
+  }
+  const focusedReply = document.activeElement?.id === "talkReplyInput" ? document.activeElement : null;
+  const replySelection = focusedReply ? [focusedReply.selectionStart, focusedReply.selectionEnd] : null;
+  const oldTalkList = ui.view === "talk" ? document.querySelector(".talk-replies") : null;
+  const talkScroll = oldTalkList ? { key: oldTalkList.dataset.talkKey, top: oldTalkList.scrollTop,
+    atEnd: oldTalkList.scrollHeight - oldTalkList.scrollTop - oldTalkList.clientHeight < 48 } : null;
   refreshAppState();
 
   if (!appState.user && !["login", "setup"].includes(ui.view)) {
@@ -913,13 +971,33 @@ function render() {
   if (ui.view === "home") app.innerHTML = renderHome();
   if (ui.view === "create-room") app.innerHTML = renderCreateRoom();
   if (ui.view === "chat") app.innerHTML = renderChat();
+  if (ui.view === "talk") app.innerHTML = renderTalk();
   if (ui.view === "topic") app.innerHTML = renderTopic();
   if (ui.view === "gacha") app.innerHTML = renderGacha();
+  if (appState.user && !["login", "setup"].includes(ui.view)) app.innerHTML += renderBottomNav();
+  if (chatSelection && ui.view === "chat") {
+    const input = document.querySelector("#chatInput");
+    input?.focus({ preventScroll: true });
+    input?.setSelectionRange(...chatSelection);
+  }
+  const messageList = document.querySelector(".chat-shell .message-list");
+  if (messageList) messageList.scrollTop = !chatScroll || chatScroll.room !== appState.activeRoomId || chatScroll.atEnd || ui.scrollChatToEnd ? messageList.scrollHeight : chatScroll.top;
+  ui.scrollChatToEnd = false;
 
   const topicInput = document.querySelector("#topicInput");
   if (topicInput) {
     topicInput.focus();
     updateTopicCounter();
+  }
+  if (replySelection && ui.view === "talk") {
+    const input = document.querySelector("#talkReplyInput");
+    input?.focus({ preventScroll: true });
+    input?.setSelectionRange(...replySelection);
+  }
+  if (ui.view === "talk") {
+    const list = document.querySelector(".talk-replies");
+    if (list) list.scrollTop = !talkScroll || talkScroll.key !== list.dataset.talkKey || talkScroll.atEnd || ui.scrollTalkToEnd ? list.scrollHeight : talkScroll.top;
+    ui.scrollTalkToEnd = false;
   }
 }
 
@@ -936,7 +1014,7 @@ function refreshAppState() {
 
 function handleSharedUpdate() {
   refreshAppState();
-  if (["home", "chat"].includes(ui.view)) render();
+  if (["home", "chat", "talk"].includes(ui.view)) render();
 }
 
 roomChannel?.addEventListener("message", (event) => {
@@ -960,13 +1038,13 @@ function renderLogin() {
           <div class="brand-mark">ぽ</div>
           <div>
             <h1 class="brand-title">ぽとんちゅ</h1>
-            <p class="brand-subcopy">一首しか送れないチャット。</p>
+            <p class="brand-subcopy">一首から、会話がはじまる。</p>
           </div>
         </div>
-        <p class="login-copy">話したいことを10字で置いて、ことばを選んで、友達にぽとんと送る。普通の文章は送れません。</p>
+        <p class="login-copy">相手を選んで、伝えたい思いを一首に。ことばを選び、ぽとんと送ったら、おしゃべりの続きもここで。</p>
         <button type="button" class="google-button" data-action="google-login">
-          <span class="google-dot">G</span>
-          Googleでログイン
+          <span class="google-dot" aria-hidden="true">${PREVIEW_MODE ? "ぽ" : "G"}</span>
+          ${PREVIEW_MODE ? "プレビューをはじめる" : "Googleでログイン"}
         </button>
         <p class="small-note">${escapeHtml(backend.status)}</p>
         ${inviteNote}
@@ -981,8 +1059,8 @@ function renderSetup() {
       <div class="setup-panel">
         <div class="page-title">
           <p class="eyebrow">account</p>
-          <h1 class="brand-title">アカウント作成</h1>
-          <p class="brand-subcopy">友達に見える名前とアイコンを決めます。</p>
+          <h1 class="brand-title">${PREVIEW_MODE ? "プレビューの準備" : "アカウント作成"}</h1>
+          <p class="brand-subcopy">${PREVIEW_MODE ? "お試しの名前とアイコンを決めます。" : "友達に見える名前とアイコンを決めます。"}</p>
         </div>
         <form class="setup-form" data-form="setup">
           <label class="field-label">
@@ -1004,7 +1082,7 @@ function renderSetup() {
                 .join("")}
             </div>
           </div>
-          <button type="submit" class="primary-button">マイページへ</button>
+          <button type="submit" class="primary-button">トーク一覧へ</button>
         </form>
       </div>
     </section>
@@ -1012,35 +1090,48 @@ function renderSetup() {
 }
 
 function renderHome() {
+  const tab = ui.mainTab || "talks";
   return `
-    <section class="screen">
+    <section class="screen main-tab-screen" aria-label="${tab === "profile" ? "ホーム" : tab === "favorites" ? "おきにいり" : "トーク一覧"}">
       ${renderTopbar(`
-        <button type="button" class="create-button" data-action="go-create-room">新しいルームを作る</button>
-        <button type="button" class="ghost-button" data-action="logout">ログアウト</button>
+        ${tab === "talks" ? '<button type="button" class="create-button" data-action="go-create-room">新しいトーク</button>' : ""}
+        ${tab === "profile" ? '<button type="button" class="ghost-button" data-action="logout">ログアウト</button>' : ""}
       `)}
-      <div class="home-grid">
-        <section class="panel">
+      <div class="main-tab-content">
+        ${tab === "talks" ? `<section class="panel">
           <div class="panel-header">
             <div>
-              <p class="eyebrow">rooms</p>
-              <h2>参加中のチャットルーム</h2>
+              <p class="eyebrow">talks</p>
+              <h2>トーク</h2>
+              <p class="small-note">一首を送りたい相手・グループを選んでね。</p>
             </div>
           </div>
           ${renderRoomList()}
-        </section>
-        <aside class="panel">
-          ${renderProfileCard()}
+          ${PREVIEW_MODE ? '<button type="button" class="ghost-button sample-rooms-button" data-action="sample-rooms">仮の相手・グループを追加して試す</button>' : ""}
+          ${renderPreviewControls()}
+        </section>` : tab === "profile" ? `<section class="panel">${renderProfileCard()}</section>` : `<section class="panel">
           <div class="panel-header">
             <div>
               <p class="eyebrow">favorite</p>
-              <h2>お気に入りの一首</h2>
+              <h2>おきにいり</h2>
+              <p class="small-note">心に残った一首を、ここにまとめて。</p>
             </div>
           </div>
           ${renderFavorite()}
-        </aside>
+        </section>`}
       </div>
     </section>
   `;
+}
+
+function renderBottomNav() {
+  const active = ui.view === "home" ? ui.mainTab || "talks" : "talks";
+  const icons = {
+    profile: '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/>',
+    talks: '<path d="M21 11a8 8 0 0 1-8 8H7l-5 3 2-6a8 8 0 1 1 17-5Z"/><path d="M8 10h8M8 14h5"/>',
+    favorites: '<path d="m12 3 3 6 7 1-5 5 1 7-6-3-6 3 1-7-5-5 7-1z"/>',
+  };
+  return `<nav class="bottom-nav" aria-label="メインメニュー">${[["profile", "ホーム"], ["talks", "トーク"], ["favorites", "おきにいり"]].map(([tab, label]) => `<button type="button" data-action="switch-tab" data-tab="${tab}" ${tab === active ? 'aria-current="page"' : ""}><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${icons[tab]}</svg><span>${label}</span></button>`).join("")}</nav>`;
 }
 
 function renderTopbar(actions = "") {
@@ -1083,6 +1174,10 @@ function renderProfileCard() {
         </div>
       </div>
       <p class="small-note">写真は丸いアイコンとして表示されます。</p>
+      <form class="profile-name-form" data-form="profile-name">
+        <label class="field-label" for="profileName">ユーザー名</label>
+        <div class="profile-name-row"><input id="profileName" name="profileName" maxlength="12" value="${escapeAttribute(user.name)}" autocomplete="nickname" /><button type="submit" class="copy-button">名前を保存</button></div>
+      </form>
       <div class="notification-box">
         <div>
           <p class="eyebrow">notification</p>
@@ -1090,6 +1185,7 @@ function renderProfileCard() {
           <p class="small-note">${escapeHtml(backend.notificationStatus)}</p>
         </div>
         <button type="button" class="copy-button" data-action="enable-notifications">通知を受け取る</button>
+        <p class="small-note">24時間ごとの定期通知は、まだ利用できません。</p>
       </div>
     </div>
   `;
@@ -1099,8 +1195,8 @@ function renderRoomList() {
   if (appState.rooms.length === 0) {
     return `
       <div class="empty-state">
-        <p>まだルームがありません。</p>
-        <button type="button" class="primary-button" data-action="go-create-room">最初のルームを作る</button>
+        <p>まだトークがありません。</p>
+        <button type="button" class="primary-button" data-action="go-create-room">相手・グループのトークを作る</button>
       </div>
     `;
   }
@@ -1109,15 +1205,17 @@ function renderRoomList() {
     <div class="room-list">
       ${appState.rooms
         .slice()
-        .sort((a, b) => b.createdAt - a.createdAt)
+        .filter((room) => room.members.some((member) => member.id === appState.user.id))
+        .sort((a, b) => (b.messages.at(-1)?.createdAt || b.createdAt) - (a.messages.at(-1)?.createdAt || a.createdAt))
         .map(
           (room) => `
             <button type="button" class="room-item" data-action="open-room" data-room-id="${escapeAttribute(room.id)}">
-              <span>
+              ${renderAvatar({ icon: room.type === "group" ? "輪" : room.name.slice(0, 1) }, "avatar room-avatar")}
+              <span class="room-summary">
                 <strong>${escapeHtml(room.name)}</strong>
-                <span class="room-meta">${room.type === "group" ? "グループ" : "1対1"} ・ ${room.members.length}人 ・ ${room.messages.length}首 ・ ${formatDate(room.createdAt)}</span>
+                <span class="room-meta">${escapeHtml(room.messages.at(-1)?.kind === "text" ? room.messages.at(-1).text : room.messages.length ? "一首がぽとんと届きました" : "最初の一首を送ってみよう")}</span>
               </span>
-              <span class="room-kind">${getYesterdayReflection(room) ? "昨日のぽとん" : room.type === "group" ? "グループ" : "1対1"}</span>
+              <span class="room-kind">${room.type === "group" ? "グループ" : "1対1"}</span>
             </button>
           `,
         )
@@ -1127,29 +1225,34 @@ function renderRoomList() {
 }
 
 function renderFavorite() {
-  const favorite = appState.favorite;
-  if (!favorite) {
+  const favorites = getFavorites();
+  if (!favorites.length) {
     return `
       <div class="favorite-box">
-        <p class="favorite-empty">今の気持ちに残しておく一首を、1つだけ。</p>
+        <p class="favorite-empty">まだお気に入りの一首はありません。トークの「お気に入りにする」で追加できます。</p>
       </div>
     `;
   }
 
-  return `
-    <div class="favorite-box">
+  return `<div class="favorites-list">${favorites.map((favorite) => `
+    <article class="favorite-box">
       <div class="favorite-meta">${escapeHtml(favorite.roomName)} ・ ${escapeHtml(favorite.topic)}</div>
       ${renderPoemLines(favorite.lines)}
       <div class="favorite-meta">${formatDate(favorite.savedAt)}に保存</div>
-    </div>
-  `;
+      <button type="button" class="mini-button" data-action="remove-favorite" data-room-id="${escapeAttribute(favorite.roomId)}" data-message-id="${escapeAttribute(favorite.messageId)}">お気に入りから外す</button>
+    </article>`).join("")}</div>`;
+}
+
+function getFavorites() {
+  const value = sharedState.favorites[appState.user?.id];
+  return Array.isArray(value) ? value : value ? [value] : [];
 }
 
 function renderCreateRoom() {
   const createdRoom = ui.createResultId ? findRoom(ui.createResultId) : null;
   return `
     <section class="screen room-create-screen">
-      ${renderTopbar(`<button type="button" class="back-button" data-action="go-home">マイページへ</button>`)}
+      ${renderTopbar(`<button type="button" class="back-button" data-action="go-home">トーク一覧へ</button>`)}
       <div class="panel">
         <div class="page-title">
           <p class="eyebrow">new room</p>
@@ -1190,7 +1293,7 @@ function renderCreatedRoom(room) {
       <div class="gacha-actions">
         <button type="button" class="copy-button" data-action="copy-invite" data-room-id="${escapeAttribute(room.id)}">招待リンクをコピー</button>
         <button type="button" class="primary-button" data-action="open-room" data-room-id="${escapeAttribute(room.id)}">チャットを開く</button>
-        <button type="button" class="ghost-button" data-action="go-home">マイページへ</button>
+        <button type="button" class="ghost-button" data-action="go-home">トーク一覧へ</button>
       </div>
     </div>
   `;
@@ -1203,6 +1306,11 @@ function renderChat() {
     return renderHome();
   }
 
+  const windowState = PotonchuChatRules.conversationWindow(room.messages, appState.user.id, previewNow());
+  if (!windowState.canTalk) ui.composeMode = "poem";
+  const isPoem = ui.composeMode !== "text";
+  const draft = ui.chatDrafts.get(`${room.id}:${ui.composeMode}`) || "";
+  const remaining = Math.max(0, Math.ceil((windowState.expiresAt - previewNow()) / 60000));
   return `
     <section class="screen chat-shell">
       <header class="chat-header">
@@ -1212,6 +1320,7 @@ function renderChat() {
           <h1>${escapeHtml(room.name)}</h1>
         </div>
         <div class="chat-tools">
+          <button type="button" class="copy-button" data-action="copy-invite" data-room-id="${escapeAttribute(room.id)}">招待</button>
           <label class="reaction-sound-toggle" title="リアクションの音を切り替える">
             <input type="checkbox" data-setting="reaction-sound" aria-label="リアクションの音" ${PotonchuFeedback.enabled ? "checked" : ""} />
             <span>音</span>
@@ -1222,18 +1331,178 @@ function renderChat() {
         </div>
       </header>
 
-      <section class="message-list" aria-label="一首チャット">
-        ${renderRoomStatus(room)}
-        ${renderReflectionCard(room)}
+      <section class="message-list" data-room-id="${escapeAttribute(room.id)}" aria-label="一首と会話のトーク" aria-live="polite">
+        <p class="chat-system-note">${windowState.canTalk ? `おしゃべりできる時間：あと${Math.floor(remaining / 60)}時間${remaining % 60}分。自分の一首を送ると12時間に戻ります。` : windowState.lastPoemAt ? "自分の一首から12時間たちました。次の一首で、またおしゃべりを。" : "まずは一首をぽとん。自分の一首から12時間、おしゃべりもできます。"}</p>
         ${renderMessages(room)}
       </section>
 
-      <section class="composer-dock">
-        <p class="dock-note">このルームでは普通の文章は送れません。送れるのは、完成した一首だけです。</p>
-        <button type="button" class="primary-button" data-action="go-topic">一首をつくる</button>
-      </section>
+      <form class="composer-dock chat-composer" data-form="chat-composer">
+        <div class="compose-tabs" role="group" aria-label="送るものを選ぶ">
+          <button type="button" class="mini-button ${isPoem ? "is-selected" : ""}" data-action="compose-poem" aria-pressed="${isPoem}">一首をつくる</button>
+          <button type="button" class="mini-button ${!isPoem ? "is-selected" : ""}" data-action="compose-text" aria-pressed="${!isPoem}" ${windowState.canTalk ? "" : "disabled"}>おしゃべり${windowState.canTalk ? "" : " 🔒"}</button>
+        </div>
+        <label for="chatInput" class="chat-input-label">${isPoem ? "伝えたい思いやテーマ" : "おしゃべりのメッセージ"}</label>
+        <div class="chat-input-row">
+          <textarea id="chatInput" name="message" rows="2" enterkeyhint="send" maxlength="${isPoem ? 200 : 500}" placeholder="${isPoem ? "例：助けてくれた友達に、ありがとうを伝えたい" : "一首から広がった話の続きを…"}">${escapeHtml(draft)}</textarea>
+          <button type="submit" class="primary-button" id="chatSend" ${backend.chatSending.has(room.id) ? "disabled" : ""}>${backend.chatSending.has(room.id) ? "送信中" : isPoem ? "一首ガチャ" : "送信"}</button>
+        </div>
+        <p class="dock-note">${isPoem ? "入力した思いは送信されません。一首を選んでから届きます。" : "この文章をトークに送ります。一首の送信から12時間まで。"}</p>
+        <span id="chatCount" class="chat-count">${countChars(draft)} / ${isPoem ? 200 : 500}</span>
+        <p class="keyboard-hint">Enterで${isPoem ? "ガチャを開始" : "送信"}・Shift＋Enterで改行。日本語変換の確定では送信しません。</p>
+      </form>
+      ${renderPreviewControls()}
     </section>
   `;
+}
+
+function renderTalk() {
+  const context = currentTalkContext();
+  if (!context) {
+    stopTalkSubscription();
+    ui.view = "chat";
+    return renderChat();
+  }
+  const { room, message, key } = context;
+  const replies = sharedState.talks[key] || [];
+  const draft = ui.talkDrafts.get(key) || "";
+  const status = backend.talkStatus.get(key);
+  const sending = backend.talkSending.has(key);
+  return `
+    <section class="screen talk-shell">
+      <header class="chat-header">
+        <button type="button" class="back-button" data-action="close-talk">一首のルームへ</button>
+        <div><p class="eyebrow">${escapeHtml(room.name)}</p><h1>この一首のお話</h1></div>
+        <div class="participant-stack" aria-label="参加者">${room.members.map((member) => renderAvatar(member, "avatar small", member.name)).join("")}</div>
+      </header>
+      <section class="talk-original" aria-label="きっかけの一首">
+        <div class="message-meta">${renderAvatar(message.author, "avatar small")}<span>${escapeHtml(message.author.name)} ・ ${formatDate(message.createdAt)}</span></div>
+        <span class="message-topic">${escapeHtml(message.topic)}</span>
+        ${renderPoemLines(message.lines)}
+      </section>
+      <section class="talk-replies" data-talk-key="${escapeAttribute(key)}" aria-label="この一首のトーク" aria-live="polite" aria-relevant="additions text">
+        ${status?.error ? `<div class="talk-status" role="status"><p>${escapeHtml(status.error)}</p><button type="button" class="copy-button" data-action="retry-talk-loading">もう一度つなぐ</button></div>` : ""}
+        ${!replies.length ? `<p class="talk-empty">${status?.loading ? "お話をひらいています。" : "この一首の、どこが気になった？"}</p>` : ""}
+        ${replies.slice().sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)).map((reply) => `
+          <article class="talk-reply ${reply.author.id === appState.user.id ? "is-mine" : ""}">
+            <div class="message-meta">${renderAvatar(reply.author, "avatar small")}<span>${escapeHtml(reply.author.name)} ・ ${formatDate(reply.createdAt)}</span></div>
+            <p class="talk-text">${escapeHtml(reply.text)}</p>
+            ${reply.status === "sending" ? '<span class="talk-send-status">送信中</span>' : ""}
+            ${reply.status === "failed" ? `<div class="talk-send-error" role="status"><span>届きませんでした。</span><button type="button" class="mini-button" data-action="retry-talk-reply" data-reply-id="${escapeAttribute(reply.id)}">もう一度送る</button></div>` : ""}
+          </article>
+        `).join("")}
+      </section>
+      <form class="talk-composer" data-form="talk-reply">
+        <label class="talk-input-label" for="talkReplyInput">この一首への返事</label>
+        <textarea id="talkReplyInput" name="reply" rows="2" placeholder="気になったことを、ひとこと。" aria-describedby="talkReplyCount">${escapeHtml(draft)}</textarea>
+        <button type="submit" class="primary-button" id="talkReplySubmit" ${sending || !draft.trim() || countChars(draft.trim()) > 500 ? "disabled" : ""}>送る</button>
+        <span id="talkReplyCount" class="talk-reply-count">${countChars(draft.trim())} / 500</span>
+      </form>
+    </section>
+  `;
+}
+
+function currentTalkContext() {
+  const room = currentRoom();
+  const message = room?.messages.find((item) => item.id === ui.talkMessageId);
+  return room && message ? { room, message, key: talkKey(room.id, message.id) } : null;
+}
+
+function talkKey(roomId, messageId) {
+  return JSON.stringify([roomId, messageId]);
+}
+
+function openTalk(messageId) {
+  const room = currentRoom();
+  const message = room?.messages.find((item) => item.id === messageId);
+  if (!message || message.status) return;
+  ui.talkMessageId = messageId;
+  ui.talkComposing = false;
+  ui.openReactionFor = "";
+  ui.view = "talk";
+  if (isFirebaseMode()) subscribeFirebaseTalk(room.id, messageId);
+  render();
+}
+
+function stopTalkSubscription() {
+  backend.talkUnsubscribe?.();
+  backend.talkUnsubscribe = null;
+  backend.talkSubscriptionKey = "";
+}
+
+function subscribeFirebaseTalk(roomId, messageId) {
+  const key = talkKey(roomId, messageId);
+  if (!isFirebaseMode() || backend.talkSubscriptionKey === key) return;
+  stopTalkSubscription();
+  const { firestoreModule, db } = backend.firebase;
+  backend.talkSubscriptionKey = key;
+  backend.talkStatus.set(key, { loading: true });
+  backend.talkUnsubscribe = firestoreModule.onSnapshot(
+    firestoreModule.collection(db, "rooms", roomId, "messages", messageId, "replies"),
+    (snapshot) => {
+      const replies = snapshot.docs.map((doc) => normalizeTalkReply({ ...doc.data(), id: doc.id, status: doc.metadata?.hasPendingWrites ? "sending" : "" }));
+      const pending = (sharedState.talks[key] || []).filter((reply) => reply.status && !replies.some((item) => item.id === reply.id));
+      sharedState.talks = { ...sharedState.talks, [key]: [...replies, ...pending] };
+      backend.talkStatus.set(key, { loading: false });
+      if (ui.view === "talk" && currentTalkContext()?.key === key) render();
+    },
+    (error) => {
+      backend.talkStatus.set(key, { loading: false, error: error.code === "permission-denied"
+        ? "このお話を読み込めません。ルームの管理者に知らせてください。"
+        : "お話につながりませんでした。もう一度つないでみてください。" });
+      if (ui.view === "talk" && currentTalkContext()?.key === key) render();
+    },
+  );
+}
+
+function putTalkReply(key, reply) {
+  sharedState.talks = { ...sharedState.talks, [key]: [...(sharedState.talks[key] || []).filter((item) => item.id !== reply.id), normalizeTalkReply(reply)] };
+  if (!isFirebaseMode()) roomStore.save(sharedState);
+}
+
+async function sendTalkReply(retryId = "") {
+  const context = currentTalkContext();
+  if (!context || backend.talkSending.has(context.key)) return;
+  const { room, message, key } = context;
+  const user = normalizeUser(appState.user);
+  const previous = retryId ? sharedState.talks[key]?.find((reply) => reply.id === retryId && reply.author.id === user.id && reply.status === "failed") : null;
+  if (retryId && !previous) return;
+  const text = previous?.text || (ui.talkDrafts.get(key) || "").trim();
+  if (!text || countChars(text) > 500) {
+    showToast("返事は1〜500字で入れてください。");
+    return;
+  }
+  const reply = previous || { id: makeId("reply"), text, author: user, createdAt: Date.now() };
+  ui.scrollTalkToEnd = true;
+  if (!retryId) ui.talkDrafts.delete(key);
+  putTalkReply(key, { ...reply, status: isFirebaseMode() ? "sending" : "" });
+  if (!isFirebaseMode()) { render(); return; }
+  backend.talkSending.add(key);
+  render();
+  try {
+    const { firestoreModule, db } = backend.firebase;
+    const replyRef = firestoreModule.doc(db, "rooms", room.id, "messages", message.id, "replies", reply.id);
+    if (retryId) {
+      const saved = await firestoreModule.getDoc(replyRef);
+      if (saved.exists()) {
+        if (saved.data().senderId !== user.id || saved.data().text !== text) throw new Error("reply-conflict");
+        if (appState.user?.id === user.id) putTalkReply(key, { ...saved.data(), id: reply.id, status: "" });
+        return;
+      }
+    }
+    await firestoreModule.setDoc(replyRef, {
+      kind: "text", text, senderId: user.id, senderName: user.name,
+      senderPhoto: getAvatarImage(user) || "", createdAt: firestoreModule.serverTimestamp(), createdAtMillis: reply.createdAt,
+    });
+    if (appState.user?.id === user.id) putTalkReply(key, { ...reply, status: "" });
+  } catch (error) {
+    if (appState.user?.id === user.id) {
+      putTalkReply(key, { ...reply, status: "failed" });
+      showToast(error.code === "permission-denied" ? "返事を保存できません。ルームの管理者に知らせてください。" : "返事が届きませんでした。もう一度送れます。");
+    }
+  } finally {
+    backend.talkSending.delete(key);
+    if (ui.view === "talk" && currentTalkContext()?.key === key && appState.user?.id === user.id) render();
+  }
 }
 
 function renderRoomStatus(room) {
@@ -1259,13 +1528,7 @@ function renderRoomStatus(room) {
 
 function renderMessages(room) {
   if (room.messages.length === 0) {
-    return `
-      <div class="empty-state">
-        <p>まだ一首は届いていません。</p>
-        <button type="button" class="primary-button" data-action="go-topic">一首をつくる</button>
-        <button type="button" class="copy-button" data-action="copy-invite" data-room-id="${escapeAttribute(room.id)}">招待リンクをコピー</button>
-      </div>
-    `;
+    return "";
   }
 
   return room.messages
@@ -1277,6 +1540,11 @@ function renderMessages(room) {
 
 function renderMessage(message, room) {
   const isMine = message.author.id === appState.user.id;
+  if (message.kind === "text") return `
+    <article class="message-row text-message ${isMine ? "is-mine" : ""}">
+      <div class="message-meta">${isMine ? "" : renderAvatar(message.author, "avatar small")}<span>${escapeHtml(message.author.name)} ・ ${formatDate(message.createdAt)}</span></div>
+      <div class="text-bubble">${escapeHtml(message.text)}</div>
+    </article>`;
   const statusText = message.status === "sending" ? " ・ 送信中" : message.status === "failed" ? " ・ 送れませんでした" : "";
   const canReact = !message.status;
   const reactionError = backend.reactionErrors.get(message.id);
@@ -1288,8 +1556,10 @@ function renderMessage(message, room) {
         <span>${escapeHtml(message.author.name)} ・ ${formatDate(message.createdAt)}${statusText}</span>
       </div>
       <div class="poem-bubble">
-        <span class="message-topic">${escapeHtml(message.topic)}</span>
-        ${renderPoemLines(message.lines)}
+        <div class="poem-open-talk">
+        <span class="message-topic">ぽとんと一首</span>
+        <span class="poem-lines">${message.lines.map((line) => `<span class="poem-line">${escapeHtml(line)}</span>`).join("")}</span>
+        </div>
         <div class="reaction-row" aria-label="ついているリアクション">${renderReactionSummary(message, room)}</div>
         ${pulse ? `<span class="reaction-pop" aria-hidden="true">${escapeHtml(pulse.label)}</span>` : ""}
         <div class="message-footer">
@@ -1413,6 +1683,7 @@ function renderGacha() {
             <div class="gacha-title">
               <p class="eyebrow">isshu gacha</p>
               <h1>一首ガチャ</h1>
+              <p class="small-note">思いのキーワードに合わせて、一首のことばを選んでいます。</p>
             </div>
             <span class="topic-badge">${escapeHtml(composer.topic)}</span>
           </div>
@@ -1456,6 +1727,7 @@ function renderGacha() {
           <div class="gacha-title">
             <p class="eyebrow">isshu gacha</p>
             <h1>穴あき一首</h1>
+            <p class="small-note">真ん中の「5音」を4つから選んでね。</p>
           </div>
           <span class="topic-badge">${escapeHtml(composer.topic)}</span>
         </div>
@@ -1503,7 +1775,8 @@ function renderConfirm() {
         <div>
           <p class="eyebrow">send</p>
           <h1>この一首で送る？</h1>
-          <p class="confirm-copy">説明は足さず、一首だけ届きます。</p>
+          <p class="confirm-copy">${escapeHtml(currentRoom()?.name || "")}へ、この一首だけ届けます。</p>
+          <p class="small-note">5・7・5・7・7に、あなたの選ぶことばをひとつ。</p>
         </div>
         <div class="poem-stage">
           <div class="poem-paper">
@@ -1560,11 +1833,93 @@ async function handleClick(event) {
 
   const action = button.dataset.action;
 
+  if (action === "switch-tab") {
+    if (!["profile", "talks", "favorites"].includes(button.dataset.tab)) return;
+    stopTalkSubscription();
+    ui.mainTab = button.dataset.tab;
+    ui.view = "home";
+    ui.composer = null;
+    ui.openReactionFor = "";
+    ui.chatComposing = false;
+    ui.talkComposing = false;
+    render();
+    window.scrollTo?.(0, 0);
+    return;
+  }
+  if (action === "remove-favorite") {
+    try {
+      await updateFavorites((items) => items.filter((item) => item.roomId !== button.dataset.roomId || item.messageId !== button.dataset.messageId));
+      render();
+      showToast("お気に入りから外しました。");
+    } catch { showToast("お気に入りを更新できませんでした。もう一度お試しください。"); }
+    return;
+  }
+
+  if (action === "sample-rooms") {
+    if (!PREVIEW_MODE) return;
+    const existing = appState.rooms.filter((room) => room.createdBy === appState.user.id);
+    for (const [name, type] of [["ともだち（お試し）", "pair"], ["放課後の会（お試し）", "group"]]) {
+      if (!existing.some((room) => room.name === name)) await createRoom(name, type);
+    }
+    ui.view = "home";
+    render();
+    showToast("仮のトークを追加しました。実在の相手には届きません。");
+    return;
+  }
+  if (action === "compose-poem" || action === "compose-text") {
+    if (action === "compose-text" && !PotonchuChatRules.conversationWindow(currentRoom()?.messages || [], appState.user.id, previewNow()).canTalk) {
+      showToast("先に一首を送ってね。"); return;
+    }
+    ui.composeMode = action === "compose-poem" ? "poem" : "text";
+    render();
+    document.querySelector("#chatInput")?.focus();
+    return;
+  }
+  if (action === "preview-time") {
+    if (!PREVIEW_MODE) return;
+    ui.clockOffset += Number(button.dataset.hours) * PotonchuChatRules.HOUR;
+    checkPreviewReminder();
+    render();
+    return;
+  }
+  if (action === "dismiss-reminder") {
+    ui.reminderVisible = false;
+    render();
+    return;
+  }
+
+  if (action === "open-talk") {
+    openTalk(button.dataset.messageId);
+    return;
+  }
+  if (action === "close-talk") {
+    stopTalkSubscription();
+    ui.talkComposing = false;
+    ui.talkMessageId = "";
+    ui.view = "chat";
+    render();
+    return;
+  }
+  if (action === "retry-talk-loading") {
+    const context = currentTalkContext();
+    if (context) {
+      stopTalkSubscription();
+      subscribeFirebaseTalk(context.room.id, context.message.id);
+      render();
+    }
+    return;
+  }
+  if (action === "retry-talk-reply") {
+    await sendTalkReply(button.dataset.replyId);
+    return;
+  }
+
   if (action === "google-login") {
     if (isFirebaseMode()) {
       await signInWithFirebase();
       return;
     }
+    if (!PREVIEW_MODE && !LOCAL_DEMO_MODE) { showToast("接続を確認しています。少し待ってからもう一度お試しください。"); return; }
     ui.view = "setup";
     render();
     return;
@@ -1579,6 +1934,9 @@ async function handleClick(event) {
   }
 
   if (action === "go-home") {
+    ui.mainTab = "talks";
+    stopTalkSubscription();
+    ui.talkComposing = false;
     ui.view = "home";
     ui.createResultId = null;
     render();
@@ -1595,6 +1953,8 @@ async function handleClick(event) {
   if (action === "open-room") {
     await setActiveRoom(button.dataset.roomId);
     ui.view = "chat";
+    ui.composeMode = "poem";
+    ui.composer = null;
     render();
     return;
   }
@@ -1606,10 +1966,11 @@ async function handleClick(event) {
   }
 
   if (action === "go-topic") {
-    ui.view = "topic";
-    ui.topic = "";
+    ui.view = "chat";
+    ui.composeMode = "poem";
     ui.composer = null;
     render();
+    document.querySelector("#chatInput")?.focus();
     return;
   }
 
@@ -1696,6 +2057,45 @@ async function handleSubmit(event) {
   if (!form) return;
   event.preventDefault();
 
+  if (form.dataset.form === "profile-name") {
+    const name = form.elements.namedItem("profileName").value.trim();
+    if (!name || countChars(name) > 12) { showToast("名前は1〜12字で入力してください。"); return; }
+    const updated = normalizeUser({ ...appState.user, name });
+    try { await upsertUser(updated); }
+    catch { showToast("名前を保存できませんでした。もう一度お試しください。"); return; }
+    saveSessionUser(updated);
+    updateLocalProfile(updated);
+    render();
+    showToast("名前を保存しました。");
+    return;
+  }
+
+  if (form.dataset.form === "chat-composer") {
+    const room = currentRoom();
+    const text = form.elements.namedItem("message").value.trim();
+    if (!room || !text) { showToast("思いやメッセージを入力してください。"); return; }
+    if (ui.composeMode === "poem") {
+      if (countChars(text) > 200) { showToast("思いは200字以内で入力してください。"); return; }
+      ui.topic = text;
+      spinGacha(text);
+    } else {
+      // Re-check at send time, including when a tab stays open past the deadline.
+      if (!PotonchuChatRules.conversationWindow(room.messages, appState.user.id, previewNow()).canTalk) {
+        ui.composeMode = "poem"; render(); showToast("12時間たちました。次の一首を送ってね。"); return;
+      }
+      if (countChars(text) > 500) { showToast("文章は500字以内です。"); return; }
+      await sendChatMessage(text);
+    }
+    return;
+  }
+
+  if (form.dataset.form === "talk-reply") {
+    const context = currentTalkContext();
+    if (context) ui.talkDrafts.set(context.key, form.elements.namedItem("reply").value);
+    await sendTalkReply();
+    return;
+  }
+
   if (form.dataset.form === "setup") {
     const name = form.name.value.trim();
     const icon = selectedRadio(form, "icon");
@@ -1750,6 +2150,23 @@ async function handleSubmit(event) {
 }
 
 function handleInput(event) {
+  if (event.target.id === "chatInput") {
+    ui.chatDrafts.set(`${appState.activeRoomId}:${ui.composeMode}`, event.target.value);
+    const counter = document.querySelector("#chatCount");
+    if (counter) counter.textContent = `${countChars(event.target.value)} / ${ui.composeMode === "poem" ? 200 : 500}`;
+    return;
+  }
+  if (event.target.id === "talkReplyInput") {
+    const context = currentTalkContext();
+    if (!context) return;
+    ui.talkDrafts.set(context.key, event.target.value);
+    const count = countChars(event.target.value.trim());
+    const button = document.querySelector("#talkReplySubmit");
+    if (button) button.disabled = count === 0 || count > 500 || backend.talkSending.has(context.key);
+    const counter = document.querySelector("#talkReplyCount");
+    if (counter) counter.textContent = `${count} / 500`;
+    return;
+  }
   if (event.target.dataset.setting === "reaction-sound") {
     PotonchuFeedback.setEnabled(event.target.checked);
     if (event.target.checked) PotonchuFeedback.play();
@@ -1952,8 +2369,8 @@ function upsertLocalMessage(roomId, message) {
     rooms: sharedState.rooms.map((room) => {
       if (room.id !== roomId) return room;
       const messages = [
-        message,
         ...room.messages.filter((item) => item.id !== message.id && (!message.clientId || item.clientId !== message.clientId)),
+        message,
       ].sort((a, b) => a.createdAt - b.createdAt);
       return { ...room, messages };
     }),
@@ -1969,14 +2386,15 @@ async function setActiveRoom(roomId) {
 }
 
 async function spinGacha(topic, previousTemplateId = "") {
-  topic = PotonchuPoems.normalizeTopic(topic);
-  if (!topic || countChars(topic) > 10) {
-    showToast("お題は1〜10字で入れてください。");
+  topic = String(topic).trim();
+  if (!topic || countChars(topic) > 200) {
+    showToast("思いは1〜200字で入れてください。");
     return;
   }
   ui.view = "gacha";
   const composer = {
     topic,
+    roomId: appState.activeRoomId,
     step: "loading",
     draft: null,
     selectedChoice: "",
@@ -1996,7 +2414,7 @@ async function spinGacha(topic, previousTemplateId = "") {
     render();
   } catch (error) {
     if (ui.composer !== composer || ui.view !== "gacha") return;
-    ui.view = "topic";
+    ui.view = "chat";
     render();
     showToast("一首を用意できませんでした。もう一度まわしてみてください。");
   }
@@ -2026,13 +2444,15 @@ async function sendPoem() {
   const room = currentRoom();
   const composer = ui.composer;
   if (!room || !composer?.draft || composer.step !== "confirm" || !composer.draft.choices.includes(composer.selectedChoice)) return;
+  if (composer.roomId !== room.id) { showToast("送信先が変わりました。作り直してください。"); return; }
+  if (isFirebaseMode() && navigator.onLine === false) { showToast("つながってから、もう一度送ってください。"); return; }
 
   const lines = completePoemLines(composer.draft, composer.selectedChoice);
   const clientId = makeId("client");
   const message = {
     id: makeId("pending"),
     roomId: room.id,
-    topic: composer.topic,
+    topic: "一首",
     lines,
     poemLines: lines,
     selectedWord: composer.selectedChoice,
@@ -2043,7 +2463,7 @@ async function sendPoem() {
     senderName: appState.user.name,
     senderPhoto: getAvatarImage(appState.user) || appState.user.icon,
     reactions: {},
-    createdAt: Date.now(),
+    createdAt: previewNow(),
   };
 
   if (isFirebaseMode()) {
@@ -2061,7 +2481,7 @@ async function sendPoem() {
         senderId: appState.user.id,
         senderName: appState.user.name,
         senderPhoto: getAvatarImage(appState.user) || appState.user.icon,
-        topic: composer.topic,
+        topic: "一首",
         poemLines: lines,
         selectedWord: composer.selectedChoice,
         reactions: {},
@@ -2072,6 +2492,8 @@ async function sendPoem() {
         createdAtMillis: message.createdAt,
       });
       upsertLocalMessage(room.id, { ...message, id: docRef.id, status: "" });
+      ui.chatDrafts.delete(`${room.id}:poem`);
+      if (appState.activeRoomId === room.id) ui.composeMode = "text";
       render();
       showToast("ぽとんと届きました");
     } catch (error) {
@@ -2089,6 +2511,9 @@ async function sendPoem() {
     upsertLocalMessage(room.id, message);
   }
   await setActiveRoom(room.id);
+  ui.chatDrafts.delete(`${room.id}:poem`);
+  ui.composeMode = "text";
+  ui.scrollChatToEnd = true;
   ui.composer = null;
   ui.topic = "";
   ui.openReactionFor = "";
@@ -2192,6 +2617,28 @@ async function saveFavorite(messageId) {
   const message = room?.messages.find((item) => item.id === messageId);
   if (!message) return;
 
+  if (!PREVIEW_MODE) {
+    if (message.kind === "text" || message.status) return;
+    const favorite = { messageId: message.id, roomId: room.id, roomName: room.name, topic: message.topic, lines: [...message.lines], authorName: message.author.name, savedAt: Date.now() };
+    try {
+      await updateFavorites((items) => items.some((item) => item.roomId === room.id && item.messageId === message.id) ? items : [favorite, ...items]);
+      render();
+      showToast("お気に入りに追加しました。");
+    } catch { showToast("お気に入りを保存できませんでした。もう一度お試しください。"); }
+    return;
+  }
+
+  if (PREVIEW_MODE) {
+    if (message.kind === "text") return;
+    const favorites = getFavorites();
+    if (favorites.some((item) => item.roomId === room.id && item.messageId === message.id)) { showToast("この一首は追加済みです。"); return; }
+    const favorite = { messageId: message.id, roomId: room.id, roomName: room.name, topic: message.topic, lines: [...message.lines], authorName: message.author.name, savedAt: Date.now() };
+    sharedState = roomStore.update((data) => { data.favorites[appState.user.id] = [favorite, ...favorites]; return data; });
+    render();
+    showToast("お気に入りに追加しました。");
+    return;
+  }
+
   appState.favorite = {
     messageId: message.id,
     roomId: room.id,
@@ -2223,6 +2670,65 @@ async function saveFavorite(messageId) {
   }
   render();
   showToast("お気に入りの一首を置き換えました。");
+}
+
+async function updateFavorites(updater) {
+  const userId = appState.user?.id;
+  if (!userId) throw new Error("sign-in-required");
+  let next;
+  if (isFirebaseMode()) {
+    const { firestoreModule, db } = backend.firebase;
+    const ref = firestoreModule.doc(db, "users", userId);
+    next = await firestoreModule.runTransaction(db, async (transaction) => {
+      const snapshot = await transaction.get(ref);
+      const saved = snapshot.data() || {};
+      const current = Array.isArray(saved.favoritePoems) ? saved.favoritePoems : saved.favoritePoem ? [saved.favoritePoem] : [];
+      const updated = updater(current);
+      transaction.set(ref, { favoritePoems: updated, favoritePoem: updated[0] || null, updatedAt: firestoreModule.serverTimestamp() }, { merge: true });
+      return updated;
+    });
+    if (appState.user?.id !== userId) return;
+    sharedState = normalizeSharedState({ ...sharedState, favorites: { ...sharedState.favorites, [userId]: next } });
+    refreshAppState();
+  } else {
+    next = updater(getFavorites());
+    sharedState = roomStore.update((data) => { data.favorites[userId] = next; return data; });
+  }
+}
+
+async function sendChatMessage(text) {
+  const room = currentRoom();
+  const user = appState.user;
+  if (!room || !user || backend.chatSending.has(room.id)) return;
+  text = String(text).trim();
+  if (!text || countChars(text) > 500) return;
+  if (!PotonchuChatRules.conversationWindow(room.messages, user.id, previewNow()).canTalk) {
+    ui.composeMode = "poem"; render(); showToast("12時間たちました。次の一首を送ってね。"); return;
+  }
+  if (isFirebaseMode() && navigator.onLine === false) { showToast("つながってから、もう一度送ってください。"); return; }
+  const key = `${room.id}:text`;
+  const message = { id: makeId("text"), roomId: room.id, kind: "text", text, author: normalizeUser(user), createdAt: Date.now() };
+  ui.chatDrafts.set(key, text);
+  backend.chatSending.add(room.id);
+  render();
+  try {
+    if (isFirebaseMode()) {
+      const { firestoreModule, db } = backend.firebase;
+      await firestoreModule.setDoc(firestoreModule.doc(db, "rooms", room.id, "messages", message.id), {
+        kind: "text", text, clientId: message.id, senderId: user.id, senderName: user.name,
+        senderPhoto: getAvatarImage(user) || user.icon, createdAt: firestoreModule.serverTimestamp(), createdAtMillis: message.createdAt,
+      });
+    }
+    if (appState.user?.id !== user.id) return;
+    upsertLocalMessage(room.id, message);
+    if (ui.chatDrafts.get(key) === text) ui.chatDrafts.delete(key);
+    ui.scrollChatToEnd = true;
+  } catch {
+    if (appState.user?.id === user.id) showToast("文章を送れませんでした。入力は残しています。もう一度お試しください。");
+  } finally {
+    backend.chatSending.delete(room.id);
+    if (appState.user?.id === user.id) render();
+  }
 }
 
 async function handleProfilePhotoSelection(file) {
@@ -2426,12 +2932,14 @@ function resizeImageToDataUrl(file, size) {
 }
 
 const poemProvider = PotonchuPoems.createProvider(poemLibrary);
+const previewPoemGenerator = PotonchuChatRules.createGenerator();
 const aiPoemQueues = new Map();
 let aiCallable = null;
 let aiUnavailableUntil = 0;
 
 async function generatePoem(topic, previousTemplateId, roomId) {
   const config = window.POTONCHU_GENERATION_CONFIG || {};
+  if (PREVIEW_MODE || !config.enabled) return previewPoemGenerator(topic);
   if (config.enabled && isFirebaseMode() && appState.user && roomId && Date.now() >= aiUnavailableUntil) {
     const key = JSON.stringify([appState.user.id, roomId, topic]);
     let queue = aiPoemQueues.get(key) || [];
@@ -2457,7 +2965,7 @@ async function generatePoem(topic, previousTemplateId, roomId) {
       aiUnavailableUntil = Date.now() + 60000;
     }
   }
-  return poemProvider.generate(topic, previousTemplateId);
+  return previewPoemGenerator(topic);
 }
 
 function completePoemLines(draft, selectedChoice) {
@@ -2632,9 +3140,87 @@ function escapeAttribute(text) {
   return escapeHtml(text).replaceAll("`", "&#096;");
 }
 
+function previewNow() { return Date.now(); }
+
+function checkPreviewReminder() {
+  if (!PREVIEW_MODE) return;
+  if (PotonchuChatRules.reminderDue(ui.previewStartedAt, ui.lastReminderAt, previewNow())) {
+    ui.lastReminderAt = previewNow();
+    ui.reminderVisible = true;
+  }
+}
+
+function renderPreviewControls() {
+  if (!PREVIEW_MODE) return "";
+  return `<aside class="preview-controls">
+    ${ui.reminderVisible ? `<div class="reminder-card" role="status"><strong>ぽとんちゅから、お知らせの見本</strong><p>今日の思いを、だれかに一首届けてみない？</p><button type="button" class="mini-button" data-action="dismiss-reminder">閉じる</button></div>` : ""}
+    <details><summary>お試し時計・通知の確認</summary>
+      <p>このタブの時計を進めて、12時間の制限と24時間ごとのお知らせを試せます。現在：${escapeHtml(new Date(previewNow()).toLocaleString("ja-JP"))}（${ui.clockOffset / PotonchuChatRules.HOUR}時間進めています）</p>
+      <div class="preview-clock-actions"><button type="button" class="mini-button" data-action="preview-time" data-hours="12">12時間進める</button><button type="button" class="mini-button" data-action="preview-time" data-hours="24">24時間進める</button></div>
+      <p>通知は画面内の見本です。サイトを閉じている間のプッシュ通知は、接続後に使えるようにします。会話はお試し用で、再読み込みすると失われる場合があります。</p>
+    </details>
+  </aside>`;
+}
+
+function handleChatEnter(event) {
+  const input = event.target;
+  if (input.id !== "chatInput") return;
+  const keyboard = event.type === "keydown";
+  const isEnter = keyboard ? event.key === "Enter" : ["insertLineBreak", "insertParagraph"].includes(event.inputType);
+  if (!isEnter) return;
+  if (keyboard) ui.chatNewlineRequested = Boolean(event.shiftKey);
+  if (event.shiftKey || (!keyboard && ui.chatNewlineRequested)) return;
+  // Some mobile keyboards only emit beforeinput; Safari may finish composition
+  // immediately before reporting the same Enter. Neither must confirm and send.
+  if (event.isComposing || ui.chatComposing || event.keyCode === 229
+    || Date.now() - (ui.chatCompositionEndedAt || 0) < 80) return;
+  event.preventDefault();
+  if (!event.repeat) input.form?.requestSubmit();
+}
+
+app.addEventListener("keydown", handleChatEnter);
+app.addEventListener("beforeinput", handleChatEnter);
+app.addEventListener("keyup", (event) => {
+  if (event.target.id === "chatInput") ui.chatNewlineRequested = false;
+});
+app.addEventListener("compositionstart", (event) => {
+  if (event.target.id === "chatInput") ui.chatComposing = true;
+});
+app.addEventListener("compositionend", (event) => {
+  if (event.target.id !== "chatInput") return;
+  ui.chatComposing = false;
+  ui.chatCompositionEndedAt = Date.now();
+  handleInput(event);
+  if (ui.chatRenderPending) { ui.chatRenderPending = false; render(); }
+});
+// A suspended tab checks the real deadline again as soon as it becomes visible.
+function refreshPreviewClock() {
+  const wasReminderVisible = ui.reminderVisible;
+  checkPreviewReminder();
+  if (!appState.user || !["chat", "home"].includes(ui.view)) return;
+  const talkButton = app.querySelector('[data-action="compose-text"]');
+  const canTalk = PotonchuChatRules.conversationWindow(currentRoom()?.messages || [], appState.user.id, previewNow()).canTalk;
+  // Do not rebuild a focused composer just to tick a clock.
+  if (wasReminderVisible !== ui.reminderVisible || (talkButton && talkButton.disabled === canTalk)) render();
+}
+window.setInterval(refreshPreviewClock, 30000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshPreviewClock(); });
+
 app.addEventListener("click", handleClick);
 app.addEventListener("submit", handleSubmit);
 app.addEventListener("input", handleInput);
+app.addEventListener("compositionstart", (event) => {
+  if (event.target.id === "talkReplyInput") ui.talkComposing = true;
+});
+app.addEventListener("compositionend", (event) => {
+  if (event.target.id !== "talkReplyInput") return;
+  ui.talkComposing = false;
+  handleInput(event);
+  if (ui.talkRenderPending) {
+    ui.talkRenderPending = false;
+    render();
+  }
+});
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && ui.openReactionFor) {
     const messageId = ui.openReactionFor;

@@ -2,7 +2,9 @@ https://coco0214yan-ship-it.github.io/POTONCYU/
 
 # ぽとんちゅ
 
-一首しか送れないチャット。10字以内のお題から穴あき一首を引き、4択で完成した一首をルームへ送ります。
+一首から会話がはじまるチャット。相手やグループを選び、200字以内で思いを入力して一首ガチャを回します。真ん中の5音を4択から選び、完成した一首を送るか引き直すか決められます。
+
+2026-11-15に、下部の「ホーム・トーク・おきにいり」、スマホでのコンパクト表示、Enter送信、複数のお気に入り、トーク内のおしゃべりを本番へ反映しました。プレビュー用の仮の相手・時計・通知見本は本番に表示しません。
 
 ## 開き方
 
@@ -12,22 +14,26 @@ PC内で開く場合は、このフォルダでPowerShellを開いて次を実�
 
 ```powershell
 $env:PORT = "4280"
-node server.js
+node server.cjs
 ```
 
-ブラウザで http://127.0.0.1:4280/ を開きます。`server.js` はローカルの開発用です。GoogleログインにはFirebase Authenticationでそのホストの許可が必要です。
+仮データで確認する場合はブラウザで http://127.0.0.1:4280/?demo=1 を開きます。実際のログイン・通信は本番URLで利用します。ローカルでGoogleログインを使う場合は、Firebase Authenticationでそのホストの許可が必要です。
 
 ## 一首とリアクション
 
-- `poem-engine.js`: 自由入力を話題の単語から分類。お題を本文に残し、1つのお題につき22パターン以上を重複せず一巡します。
-- 分類できないお題も汎用22パターンで表示します。このローカル生成はテンプレート方式で、自由文の細かな意味をAIが理解する機能ではありません。
+- `chat-rules.js`: 思いのキーワードから一首の組み合わせを選びます。各行と選択肢の読み仮名で5・7・5・7・7を検証しています。AIは未接続で、分類できない思いには汎用の一首を使います。入力した思いそのものはトークに送りません。
+- 自分がそのトークで最後に一首を送ってから12時間、おしゃべりを送れます。送信直前にも期限を確認します。サーバーのFirestoreルールで12時間を強制する設定は今回変更していません。
+- おしゃべりは `rooms/{roomId}/messages` に `kind: "text"` として保存します。過去の一首も引き続き表示します。
+- お気に入りはユーザー情報の `favoritePoems` に複数保存します。過去の `favoritePoem` も読み込み、更新はトランザクションで行います。
 - 一首と4択はセットで管理します。無関係なフレーズを後から混ぜません。
 - リアクションは選択直後に表示。Firestoreでは選んだ種類だけを更新し、他の人の反応を保ちます。保存失敗時は自分の変更を戻し、画面に表示します。
 - リアクションの音は端末内で合成します。チャット上部の「音」で切り替え、端末ごとに設定を保存します。
 
+24時間ごとの定期通知は未接続です。既存のFirebase設定と通知受信処理は維持しています。Firebase FunctionsやFirestoreルールのデプロイは、GitHub Pagesの更新とは別です。
+
 ## AI生成の有効化
 
-接続コードは用意済みですが、`firebase-config.js` の `POTONCHU_GENERATION_CONFIG.enabled` は初期値 `false` です。現在、OpenAIへの通信や課金は発生しません。OpenAI APIとFirebase Cloud Functionsを利用する設定を終えてから有効にします。
+接続コードは用意済みですが、`firebase-config.js` の `POTONCHU_GENERATION_CONFIG.enabled` は初期値 `false` です。現在、OpenAIへの通信や課金は発生しません。200字の思いの入力と読み仮名による音数検証に生成APIを対応させてから、下記の接続設定を行います。今回AIや有料サービスを有効にはしていません。
 
 1. OpenAI APIを利用できるアカウントとAPIキー、FirebaseでFunctionsを利用できる契約を用意します。
 2. このフォルダのPowerShellで `npm --prefix functions install` を実行します。
@@ -44,7 +50,7 @@ node server.js
 ## 確認
 
 ```powershell
-node --test tests/poem-engine.test.cjs tests/reactions.test.cjs tests/ai-generation.test.cjs
+node --test tests/production-chat.test.cjs tests/chat-flow.test.cjs tests/chat-rules.test.cjs tests/poem-engine.test.cjs tests/reactions.test.cjs tests/ai-generation.test.cjs
 ```
 
 `tests/ui-smoke.cjs` はPlaywrightを使ったローカル画面確認です。Firebase設定を空にした検証専用のブラウザで動かし、本物のアカウントやルームには書き込みません。
