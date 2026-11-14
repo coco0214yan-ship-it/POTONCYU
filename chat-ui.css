@@ -63,6 +63,9 @@ body:has(.chat-shell) .preview-notice { flex: 0 0 auto; }
 .profile-name-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; margin-top: 8px; }
 .profile-name-row button { padding: 8px 14px; }
 .profile-name-form { margin: 8px 0 20px; }
+.login-help { margin-top: 14px; padding: 14px; border: 1px solid var(--line); border-radius: 16px; background: var(--cream); font-size: 13px; line-height: 1.8; overflow-wrap: anywhere; }
+.login-help p { margin: 8px 0; }
+.login-help .copy-button { padding: 8px 12px; font-size: 12px; }
 @media (max-width: 720px) {
   .preview-notice { padding: 4px 8px; gap: 0 8px; font-size: 9px; line-height: 1.5; }
   .main-tab-content { margin-top: 10px; }

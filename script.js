@@ -766,15 +766,37 @@ function canUseBrowserNotifications() {
 
 async function signInWithFirebase() {
   if (!isFirebaseMode()) return false;
+  backend.loginError = null;
   try {
     const { authModule, auth } = backend.firebase;
     const provider = new authModule.GoogleAuthProvider();
     await authModule.signInWithPopup(auth, provider);
     return true;
   } catch (error) {
-    showToast("Googleログインを完了できませんでした。");
+    const code = /^auth\/[a-z0-9-]+$/.test(error?.code || "") ? error.code : "auth/unknown";
+    backend.loginError = { code, message: googleLoginErrorMessage(code) };
+    render();
+    showToast(backend.loginError.message);
     return false;
   }
+}
+
+function isEmbeddedBrowser() {
+  return /Line\/|FBAN|FBAV|Instagram|MicroMessenger/i.test(navigator.userAgent || "");
+}
+
+function googleLoginErrorMessage(code) {
+  const messages = {
+    "auth/popup-blocked": "ログイン画面がブロックされました。SafariかChromeで開き直してください。",
+    "auth/popup-closed-by-user": "ログイン画面が閉じられました。SafariかChromeで、もう一度ログインしてください。",
+    "auth/cancelled-popup-request": "ログインを続けて開いたため中断されました。少し待って、もう一度押してください。",
+    "auth/unauthorized-domain": "このサイトのログイン許可設定を確認する必要があります。下のエラーコードをお知らせください。",
+    "auth/operation-not-allowed": "Googleログインのサイト側の設定を確認する必要があります。下のエラーコードをお知らせください。",
+    "auth/network-request-failed": "ログイン先につながりませんでした。通信状況を確認して、もう一度お試しください。",
+    "auth/web-storage-unsupported": "このブラウザではログイン情報を保存できません。SafariかChromeの通常のタブで開いてください。",
+    "auth/operation-not-supported-in-this-environment": "このアプリ内ではログインできません。SafariかChromeで開き直してください。",
+  };
+  return messages[code] || "Googleログインを完了できませんでした。SafariかChromeで開き直し、下のエラーコードをご確認ください。";
 }
 
 async function signOutCurrentUser() {
@@ -1030,6 +1052,7 @@ roomChannel?.addEventListener("message", (event) => {
 });
 
 function renderLogin() {
+  const embedded = !PREVIEW_MODE && isEmbeddedBrowser();
   const inviteNote = ui.pendingInviteRoomId ? "<p class=\"small-note\">招待リンクを開いています。ログイン後にそのルームへ入ります。</p>" : "";
   return `
     <section class="screen login-screen">
@@ -1042,11 +1065,16 @@ function renderLogin() {
           </div>
         </div>
         <p class="login-copy">相手を選んで、伝えたい思いを一首に。ことばを選び、ぽとんと送ったら、おしゃべりの続きもここで。</p>
-        <button type="button" class="google-button" data-action="google-login">
+        <button type="button" class="google-button" data-action="google-login" ${embedded ? 'disabled aria-describedby="externalBrowserHelp"' : ""}>
           <span class="google-dot" aria-hidden="true">${PREVIEW_MODE ? "ぽ" : "G"}</span>
           ${PREVIEW_MODE ? "プレビューをはじめる" : "Googleでログイン"}
         </button>
         <p class="small-note">${escapeHtml(backend.status)}</p>
+        ${embedded || backend.loginError ? `<div class="login-help" id="externalBrowserHelp" role="status">
+          ${embedded ? '<strong>SafariかChromeで開いてください</strong><p>LINEなどのアプリ内ではGoogleログインが制限されます。メニューから「ブラウザで開く」を選ぶか、下のボタンでURLをコピーし、SafariかChromeに貼り付けてください。</p>' : ""}
+          ${backend.loginError ? `<p>${escapeHtml(backend.loginError.message)}</p><p class="small-note">エラーコード：${escapeHtml(backend.loginError.code)}</p>` : ""}
+          <button type="button" class="copy-button" data-action="copy-login-link">このページのURLをコピー</button>
+        </div>` : ""}
         ${inviteNote}
       </div>
     </section>
@@ -1832,6 +1860,12 @@ async function handleClick(event) {
   }
 
   const action = button.dataset.action;
+
+  if (action === "copy-login-link") {
+    await copyText(window.location.href);
+    showToast("URLをコピーしました。SafariかChromeで貼り付けて開いてください。");
+    return;
+  }
 
   if (action === "switch-tab") {
     if (!["profile", "talks", "favorites"].includes(button.dataset.tab)) return;

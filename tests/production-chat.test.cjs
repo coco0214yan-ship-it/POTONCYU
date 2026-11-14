@@ -89,3 +89,18 @@ test("a failed profile write does not pretend the name has been saved",async()=>
   await app.run('handleSubmit({preventDefault(){},target:{closest:()=>({dataset:{form:"profile-name"},elements:{namedItem:()=>({value:"変更後"})}})}})');
   assert.equal(app.run("appState.user.name"),"確認用");
 });
+
+test("LINE shows external-browser help; Safari does not; auth failures retain a safe error code",async()=>{
+  const app=harness();
+  app.run('navigator.userAgent="Mozilla/5.0 iPhone Line/15.0"');
+  assert.equal(app.run("isEmbeddedBrowser()"),true);
+  assert.equal(app.run('renderLogin().includes("このページのURLをコピー")'),true);
+  assert.equal(app.run('renderLogin().includes("disabled aria-describedby")'),true);
+  app.run('navigator.userAgent="Mozilla/5.0 iPhone Version/18.0 Mobile Safari/604.1"');
+  assert.equal(app.run("isEmbeddedBrowser()"),false);
+  assert.equal(app.run('renderLogin().includes("disabled aria-describedby")'),false);
+  app.run(`backend.firebase.authModule={GoogleAuthProvider:class{},signInWithPopup:async()=>{throw {code:"auth/unauthorized-domain"}}};`);
+  assert.equal(await app.run("signInWithFirebase()"),false);
+  assert.equal(app.run("backend.loginError.code"),"auth/unauthorized-domain");
+  assert.match(app.run("backend.loginError.message"),/ログイン許可設定/);
+});
