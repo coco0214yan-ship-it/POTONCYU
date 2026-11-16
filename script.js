@@ -3030,7 +3030,7 @@ app.addEventListener("compositionend", (event) => {
     render();
   }
 });
-document.addEventListener("keydown", (event) => {
+if (document.addEventListener) document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && ui.openReactionFor) {
     const messageId = ui.openReactionFor;
     ui.openReactionFor = "";
