@@ -15,10 +15,10 @@ function harness() {
     document: { querySelector: () => node }, navigator: { onLine: true },
     window: { location: { search: "" }, setTimeout() {}, clearTimeout() {} },
     sessionStorage: storage(), localStorage: storage(),
-    PotonchuPoems: require("../poem-engine.js"), PotonchuFeedback: { enabled: true, play() {} },
+    PotonchuPoems: require("../poem-engine.js"), PotonchuChatRules: require("../chat-rules.js"), PotonchuFeedback: { enabled: true, play() {} },
   });
   const source = fs.readFileSync(path.join(__dirname, "../script.js"), "utf8");
-  vm.runInContext(source.slice(0, source.indexOf('app.addEventListener("click"')), context);
+  vm.runInContext(source.slice(0, source.indexOf('app.addEventListener("keydown", handleChatEnter)')), context);
   vm.runInContext(`
     saveSessionUser({ id: "me", name: "ためす人" });
     sessionStorage.setItem(ACTIVE_ROOM_KEY, "room_test");
