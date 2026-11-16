@@ -978,7 +978,7 @@ function render() {
 
   const topicInput = document.querySelector("#topicInput");
   if (topicInput) {
-    topicInput.focus();
+    topicInput.focus?.();
     updateTopicCounter();
   }
   if (replySelection && ui.view === "talk") {
