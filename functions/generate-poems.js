@@ -63,7 +63,8 @@ exports.generatePoems = onCall({
           "友達に送り、なにこれ、でもちょっと分かると返したくなる口語の5行を3首。",
           "短歌の余白を大切に。厳密な音数に合わせるための不自然な文章は避ける。",
           "お題の具体的な場面・行動を入れ、3首は展開、言い回し、終わり方を変える。",
-          `各首の1行目は指定のお題そのもの。3行目だけを文字列 ${BLANK} にする。`,
+          `3行目だけを文字列 ${BLANK} にする。1行目にお題をそのままコピーしない。`,
+          "お題は発想の種。お題の言葉を必ず本文に入れる必要はない。具体的な風景、会話、行動から自然に始める。",
           "各行24字以内。choicesは4個、各12字以内で重複なし。少なくとも2つは動詞や気持ちを含む短いフレーズにし、名詞や形容詞も混ぜる。",
           "空欄にどの選択肢を入れても前後につながるよう、一首と4択を一緒に考える。",
           "4択は肯定・ためらい・別の行動など本当に意味が変わるものにする。反対の気持ちも選べるようにする。",
@@ -87,7 +88,7 @@ exports.generatePoems = onCall({
     for (const poem of payload.poems || []) {
       if (!validPoem(poem, topic) || seen.has(poem.lines.join("\n"))) continue;
       seen.add(poem.lines.join("\n"));
-      poems.push({ ...poem, templateId: `ai_${randomUUID()}`, source: "ai" });
+      poems.push({ ...poem, topic, templateId: `ai_${randomUUID()}`, source: "ai" });
     }
     if (!poems.length) throw new Error("generation-invalid");
     return { poems };
@@ -119,7 +120,7 @@ async function reserveGeneration(db, uid) {
 
 function validPoem(poem, topic) {
   const clean = (value, max) => typeof value === "string" && value.trim() && Array.from(value).length <= max && !/[\r\n<>]/.test(value);
-  return Array.isArray(poem?.lines) && poem.lines.length === 5 && poem.lines[0] === topic && poem.lines[2] === BLANK
+  return Array.isArray(poem?.lines) && poem.lines.length === 5 && typeof poem.lines[0] === "string" && poem.lines[0].trim() !== topic && poem.lines[2] === BLANK
     && poem.lines.filter((line) => line === BLANK).length === 1 && poem.lines.every((line) => clean(line, 24))
     && Array.isArray(poem.choices) && poem.choices.length === 4 && new Set(poem.choices).size === 4
     && poem.choices.every((choice) => clean(choice, 12) && !choice.includes(BLANK));

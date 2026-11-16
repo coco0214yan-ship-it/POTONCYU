@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Honne Bell</title>
+    <link rel="stylesheet" href="honnebell.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Good Design New Hope Award prototype</p>
+          <h1>Honne Bell</h1>
+        </div>
+        <div class="signal">
+          <span></span>
+          <span></span>
+          <span></span>
+          <strong>3341</strong>
+        </div>
+      </header>
+
+      <section class="workspace" aria-label="本音ベル">
+        <aside class="pager-panel">
+          <p class="panel-kicker">受信中</p>
+          <div class="pager-screen" aria-live="polite">
+            <span id="pagerCode">3341</span>
+            <strong id="pagerTitle">さみしいけど、まだ言葉にできない</strong>
+            <p id="pagerQuestion">いま一番近くにある不安は、就活・AI・友達・将来のどれ？</p>
+          </div>
+          <div class="wave" aria-hidden="true">
+            <i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+          </div>
+          <div class="mini-copy">
+            <span>AI編集メモ</span>
+            <p id="aiMemo">声やメモから、友達に渡しやすい短い合図に変えます。</p>
+          </div>
+        </aside>
+
+        <section class="compose-panel">
+          <form id="bellForm">
+            <div class="form-row compact">
+              <label for="senderName">名前</label>
+              <input id="senderName" maxlength="12" value="わたし" />
+            </div>
+
+            <fieldset class="form-row">
+              <legend>いまの不安</legend>
+              <div class="segmented" role="radiogroup" aria-label="いまの不安">
+                <label><input type="radio" name="topic" value="job" checked />就活</label>
+                <label><input type="radio" name="topic" value="ai" />AI</label>
+                <label><input type="radio" name="topic" value="friend" />友達</label>
+                <label><input type="radio" name="topic" value="future" />将来</label>
+              </div>
+            </fieldset>
+
+            <div class="form-row">
+              <label for="noteInput">30秒で言いたいこと</label>
+              <textarea
+                id="noteInput"
+                rows="5"
+                maxlength="180"
+                placeholder="例：就活の話になると焦る。AIで仕事が変わるって聞くと、自分が選ぶ道が正しいのか不安になる。"
+              ></textarea>
+              <p class="counter"><span id="noteCount">0</span>/180</p>
+            </div>
+
+            <div class="recorder">
+              <div class="record-status">
+                <span id="recordDot"></span>
+                <strong id="recordStatus">録音待ち</strong>
+                <small id="recordTime">00:00</small>
+              </div>
+              <div class="button-row">
+                <button type="button" class="secondary-button" id="recordButton">録音</button>
+                <button type="button" class="secondary-button" id="stopButton" disabled>停止</button>
+                <button type="button" class="ghost-button" id="clearAudioButton" disabled>消す</button>
+              </div>
+              <audio id="audioPreview" controls hidden></audio>
+            </div>
+
+            <button class="primary-button" type="submit">本音ベルを送る</button>
+          </form>
+        </section>
+
+        <aside class="friends-panel">
+          <p class="panel-kicker">友達の返事</p>
+          <div class="friend-list" id="friendList"></div>
+          <div class="reply-tools">
+            <button type="button" data-reaction="わかる">わかる</button>
+            <button type="button" data-reaction="あとで話そ">あとで話そ</button>
+            <button type="button" data-reaction="声で返す">声で返す</button>
+          </div>
+        </aside>
+      </section>
+
+      <section class="radio-panel" aria-label="週末の本音ラジオ">
+        <div class="section-heading">
+          <p class="eyebrow">Weekend radio</p>
+          <h2>週末の本音ラジオ</h2>
+        </div>
+        <div class="timeline" id="timeline"></div>
+      </section>
+    </main>
+
+    <script src="honnebell.js"></script>
+  </body>
+</html>

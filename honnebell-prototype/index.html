@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>本音ベル | 静的プロトタイプ</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="site-header">
+        <div>
+          <p class="eyebrow">Good Design New Hope Award prototype</p>
+          <h1>本音ベル</h1>
+          <p class="lead">
+            就活やAI時代の不安を、友だちと3分だけ本音で話すための小さな通信装置。
+          </p>
+        </div>
+        <div class="pager-badge" aria-label="ポケベル風ステータス">
+          <span class="antenna"></span>
+          <strong>3341</strong>
+          <small>hon-ne</small>
+        </div>
+      </header>
+
+      <section class="prototype-grid" aria-label="本音ベルの入力と生成結果">
+        <form class="input-panel" id="bellForm">
+          <div class="panel-heading">
+            <p class="eyebrow">input</p>
+            <h2>いまの不安を短く入れる</h2>
+          </div>
+
+          <div class="field">
+            <label for="worryInput">今の不安</label>
+            <textarea
+              id="worryInput"
+              rows="6"
+              maxlength="180"
+              placeholder="例：AIで仕事がなくなるって聞くと、就活で何を選べばいいのか怖い"
+            ></textarea>
+            <div class="field-footer">
+              <p id="emptyHint" class="hint">一文だけでも大丈夫です。</p>
+              <p><span id="charCount">0</span>/180</p>
+            </div>
+          </div>
+
+          <fieldset class="field">
+            <legend>不安の種類</legend>
+            <div class="category-grid" role="radiogroup" aria-label="不安の種類">
+              <label><input type="radio" name="category" value="job" checked />就活</label>
+              <label><input type="radio" name="category" value="ai" />AIに仕事を奪われる不安</label>
+              <label><input type="radio" name="category" value="future" />将来</label>
+              <label><input type="radio" name="category" value="friend" />友だち関係</label>
+              <label><input type="radio" name="category" value="vague" />なんとなく不安</label>
+            </div>
+          </fieldset>
+
+          <section class="samples" aria-label="入力例">
+            <div class="section-row">
+              <p class="eyebrow">samples</p>
+              <span>押すとすぐ試せます</span>
+            </div>
+            <div class="sample-grid">
+              <button
+                type="button"
+                data-category="job"
+                data-sample="面接でちゃんと話せる気がしない。ESも内定も、周りと比べて焦る。"
+              >
+                面接が怖い
+              </button>
+              <button
+                type="button"
+                data-category="ai"
+                data-sample="AIに仕事を奪われるかもと思うと、将来どんな力を持てばいいのかわからない。"
+              >
+                AIと仕事
+              </button>
+              <button
+                type="button"
+                data-category="friend"
+                data-sample="友だちに本音を話したいけど、重いと思われそうで話せない。"
+              >
+                本音を出せない
+              </button>
+              <button
+                type="button"
+                data-category="future"
+                data-sample="将来のことを考えると怖い。ちゃんと選ばなきゃと思ってしんどい。"
+              >
+                未来が重い
+              </button>
+            </div>
+          </section>
+
+          <button class="generate-button" type="submit">本音ベルを鳴らす</button>
+        </form>
+
+        <section class="output-panel" aria-live="polite">
+          <div class="panel-heading">
+            <p class="eyebrow">output</p>
+            <h2>友だちに送れる言葉</h2>
+          </div>
+
+          <div class="pager-screen">
+            <div class="screen-top">
+              <span id="pagerCode">3341</span>
+              <small id="categoryLabel">就活</small>
+            </div>
+            <p id="pagerPreview">不安を入れると、ここに短い本音メッセージが出ます。</p>
+          </div>
+
+          <div class="result-list" id="resultList">
+            <article class="result-card is-empty">
+              <span>まだ生成されていません</span>
+              <p>入力例を押すか、不安を一文入れて「本音ベルを鳴らす」を押してください。</p>
+            </article>
+          </div>
+
+          <button class="copy-all-button" type="button" id="copyAllButton" disabled>
+            生成結果をまとめてコピー
+          </button>
+          <p class="copy-status" id="copyStatus" role="status"></p>
+        </section>
+      </section>
+
+      <section class="concept-strip" aria-label="応募時に見せたいポイント">
+        <div>
+          <p class="eyebrow">design memo</p>
+          <h2>不安を解決しきらず、話し始める余白をつくる</h2>
+        </div>
+        <p>
+          ポケベルの短さ、深夜ラジオの声、交換日記の親密さを借りて、
+          未来不安を「ひとりで処理する悩み」から「友だちと持てる社会的テーマ」へ変える試作品です。
+        </p>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

@@ -33,7 +33,7 @@ function harness() {
       requestBody = JSON.parse(options.body);
       const topic = JSON.parse(requestBody.input).topic;
       const poems = ["少し話そう", "ちょっと待ってた", "言いそびれてた"].map((second) => ({
-        lines: [topic, second, "__POTON_BLANK__", "帰る途中で", "思い出してる"],
+        lines: ["夕方の駅", second, "__POTON_BLANK__", "帰る途中で", "思い出してる"],
         choices: ["話したい", "待っている", "コンビニ", "少しだけ"],
       }));
       return { ok: true, json: async () => ({ status: "completed", output: [{ content: [{ type: "output_text", text: JSON.stringify({ poems }) }] }] }) };
@@ -56,7 +56,8 @@ test("AI returns validated poem/choice sets, with storage disabled and a per-use
   const request = { auth: { uid: "member" }, data: { topic: "帰り道", roomId: "room_test" } };
   const response = await app.invoke(request);
   assert.equal(response.poems.length, 3);
-  assert.equal(response.poems[0].lines[0], "帰り道");
+  assert.notEqual(response.poems[0].lines[0], "帰り道");
+  assert.equal(response.poems[0].topic, "帰り道");
   assert.equal(response.poems[0].choices.length, 4);
   assert.equal(app.body().store, false);
   assert.equal(app.body().text.format.strict, true);

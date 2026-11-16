@@ -3,3 +3,5 @@ functions/.env*
 firebase-debug*.log
 .firebase/
 .qa-output/
+.tools/
+functions/.secret*

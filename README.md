@@ -2,7 +2,13 @@ https://coco0214yan-ship-it.github.io/POTONCYU/
 
 # ぽとんちゅ
 
-一首しか送れないチャット。10字以内のお題から穴あき一首を引き、4択で完成した一首をルームへ送ります。
+## 現在のPC内プレビュー
+
+「本音を自由入力 → 穴あき一首ガチャ → 真ん中を4択から選ぶ → 一首から文章で会話」の試作です。読みの音数を五・七・五・七・七にそろえ、4択はすべて5音です。開くURLは http://127.0.0.1:4173/preview/index.html です。AIはまだ未接続で、定型の候補を表示します。時間制限なしが標準です。今回の変更はまだGitHub Pagesへ公開していません。詳細と本物のAIへの接続条件は [本音モードの作業メモ](docs/honne-prototype.md) を参照してください。
+
+以下は、以前の公開版の構成と接続メモです。
+
+一首しか送れないチャット。10字以内のお題から穴あき一首を引き、4択で完成した一首をルームへ送ります。一首をタップした先では、その一首について文章で会話できます。
 
 ## 開き方
 
@@ -19,11 +25,46 @@ node server.js
 
 ## 一首とリアクション
 
-- `poem-engine.js`: 自由入力を話題の単語から分類。お題を本文に残し、1つのお題につき22パターン以上を重複せず一巡します。
+- `poem-engine.js`: 自由入力を話題の単語から分類。お題そのものを1行目に固定せず、風景や行動から始めます。1つのお題につき22パターン以上を重複せず一巡します。
 - 分類できないお題も汎用22パターンで表示します。このローカル生成はテンプレート方式で、自由文の細かな意味をAIが理解する機能ではありません。
 - 一首と4択はセットで管理します。無関係なフレーズを後から混ぜません。
 - リアクションは選択直後に表示。Firestoreでは選んだ種類だけを更新し、他の人の反応を保ちます。保存失敗時は自分の変更を戻し、画面に表示します。
 - リアクションの音は端末内で合成します。チャット上部の「音」で切り替え、端末ごとに設定を保存します。
+
+## 一首ごとのトーク
+
+ルームの一首をタップするか「この一首のトーク」を押すと、元の一首を見ながら文章で会話できます。トークは同じルームの参加者が閲覧・返信できます。グループ内で特定の2人だけに見える個別チャットではありません。
+
+文章の保存先は `rooms/{roomId}/messages/{poemId}/replies/{replyId}` です。ルームの一首一覧には文章を混ぜません。書きかけの返事はトークごとに保持し、受信中も日本語入力を中断しません。保存失敗時は返事を残し、再送できます。
+
+公開前に、Firebaseの既存ルールへ次の追加が必要です。これは既存ルールに追加する断片です。ルール全体を置き換えるものではありません。
+
+```text
+// match /databases/{database}/documents の内側へ追加
+match /rooms/{roomId}/messages/{poemId}/replies/{replyId} {
+  function talkMember() {
+    return request.auth != null
+      && request.auth.uid in get(/databases/$(database)/documents/rooms/$(roomId)).data.memberIds
+      && exists(/databases/$(database)/documents/rooms/$(roomId)/messages/$(poemId));
+  }
+  allow read: if talkMember();
+  allow create: if talkMember()
+    && request.resource.data.keys().hasAll(['kind', 'text', 'senderId', 'senderName', 'senderPhoto', 'createdAt', 'createdAtMillis'])
+    && request.resource.data.keys().hasOnly(['kind', 'text', 'senderId', 'senderName', 'senderPhoto', 'createdAt', 'createdAtMillis'])
+    && request.resource.data.kind == 'text'
+    && request.resource.data.senderId == request.auth.uid
+    && request.resource.data.text is string
+    && request.resource.data.text.size() > 0
+    && request.resource.data.text.size() <= 500
+    && request.resource.data.senderName is string
+    && request.resource.data.senderPhoto is string
+    && request.resource.data.createdAt == request.time
+    && request.resource.data.createdAtMillis is int;
+  allow update, delete: if false;
+}
+```
+
+このPCではFirebase CLIを `.tools/` に用意済みです。`node .tools/node_modules/firebase-tools/lib/bin/firebase.js` の後ろにFirebaseのコマンドを続けて実行できます。この道具とログイン情報はGitHubへ公開しません。Firebaseへの管理用ログインとルール追加、AI生成関数の公開が終わるまでは、PC内のデモでトークを確認してください。
 
 ## AI生成の有効化
 
@@ -44,7 +85,7 @@ node server.js
 ## 確認
 
 ```powershell
-node --test tests/poem-engine.test.cjs tests/reactions.test.cjs tests/ai-generation.test.cjs
+node --test tests/poem-engine.test.cjs tests/reactions.test.cjs tests/ai-generation.test.cjs tests/talks.test.cjs
 ```
 
 `tests/ui-smoke.cjs` はPlaywrightを使ったローカル画面確認です。Firebase設定を空にした検証専用のブラウザで動かし、本物のアカウントやルームには書き込みません。

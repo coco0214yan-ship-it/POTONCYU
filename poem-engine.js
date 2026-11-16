@@ -237,13 +237,41 @@
     return Boolean(draft && Array.isArray(draft.lines) && draft.lines.length === 5
       && draft.lines[2] === BLANK && draft.lines.filter((line) => line === BLANK).length === 1
       && draft.lines.every((line) => typeof line === "string" && line.length > 0 && Array.from(line).length <= 24 && !/[\r\n<>]/.test(line))
-      && (!topic || draft.lines.some((line) => normalizeTopic(line).includes(normalizeTopic(topic))))
+      && (!topic || normalizeTopic(draft.topic) === normalizeTopic(topic))
       && Array.isArray(draft.choices) && draft.choices.length === 4 && new Set(draft.choices).size === 4
       && draft.choices.every((choice) => typeof choice === "string" && choice.trim() && Array.from(choice).length <= 12 && !/[\r\n<>]/.test(choice) && !choice.includes(BLANK)));
   }
 
   function isAction(choice) {
     return /たい|てる|いる|ない|なかった|迷う|迷って|待つ|待って|言う|言え|する|なる|ほしい|しまう|続く|行く|歩く|聞く|寝る|思う|あげる|食べる|頑張る|残る|忘れる|開く|もらう|選ぶ|撮る|出す|見る|言って|みる|忘れ|聞いて|残して|伝え|して|食べ|泣ける|見送る/.test(choice);
+  }
+
+  const openings = {
+    plan: ["カレンダーには", "玄関のくつ", "待ち合わせ前", "予報をひらく", "目覚ましの横", "改札の向こう", "空けた土曜日", "かばんの中で", "駅前の地図", "予定のすきま"],
+    food: ["駅前の灯り", "メニューの前で", "お腹の音に", "湯気のむこうで", "看板見つけて", "最後のポテト", "お店を出たら", "空いたお皿に", "冷蔵庫あけ", "満腹の夜"],
+    cafe: ["窓ぎわの席", "カップがふたつ", "ノートをひらく", "向かいの椅子に", "冷めたコーヒー", "お皿のケーキ", "いつものテーブル", "氷がとける", "午後の窓辺で", "ミルクを混ぜる"],
+    feeling: ["通知のない夜", "送る前の指", "名前を見つけ", "なんでもない日", "空いたとなりに", "画面を閉じて", "部屋が静かで", "小さな声で", "用事を探す", "いつもの挨拶"],
+    sorry: ["下書きのまま", "帰る途中で", "言い方ひとつ", "画面の端に", "となりの席が", "声をかけずに", "書いては消して", "顔を見たなら", "昨日の続き", "深呼吸して"],
+    thanks: ["帰りの空が", "もらった言葉", "次のごはんは", "さっきのことを", "お礼をひとつ", "借りてた傘を", "笑ったあとも", "伝える前に", "軽くなった荷", "手を振るほうへ"],
+    daily: ["夕方の駅", "かばんを置いた", "眠たい目でも", "赤信号で", "いつもの道に", "終わったあとの", "イヤホン外す", "自販機の前", "靴ひも結ぶ", "今日の写真は"],
+    group: ["既読が増える", "集まる前に", "行くよの文字が", "候補を並べ", "誰かのノリで", "名前の列に", "画面いっぱい", "靴を履いたら", "空いた椅子にも", "返事のすきま"],
+    study: ["机のはしに", "白いノートと", "問題の前で", "赤ペンを持つ", "ページをめくる", "図書館の席", "提出のあと", "丸を数えて", "消しゴムのかす", "チャイムのあとに"],
+    work: ["帰りの電車", "エプロン外す", "休憩室で", "シフトのすみに", "名札をしまう", "椅子に座れば", "時計を見てる", "おつかれの声", "明日の欄には", "休日の朝"],
+    weather: ["窓のむこうは", "傘をひらいて", "玄関先で", "水たまりにも", "駅の屋根には", "かばんの底に", "濡れたくつ先", "空を見上げて", "予報の画面", "雲の切れ間に"],
+    outing: ["地図の向こうに", "写真をめくる", "小さな荷物", "まだ知らない駅", "曲がり角には", "帰りの電車", "おやつを詰めて", "空けた時間に", "窓ぎわの席", "おみやげの袋"],
+    hobby: ["好きな場面を", "見終えたあとに", "予定を空けて", "時計を忘れ", "思い出したら", "おすすめの欄", "帰る電車も", "その日を数え", "画面の向こう", "続きをひらく"],
+    celebration: ["ろうそくの火が", "リボンを結び", "今日の写真に", "ケーキの箱を", "声をそろえて", "カレンダーには", "日付の端で", "おすそわけする", "包みを渡す", "帰り際には"],
+  };
+
+  function composeLines(topic, category, index, row) {
+    const [second, fourth, fifth] = row;
+    if (category === "open") return [second === topic ? "画面をひらいて" : second, `「${topic}」の話`, BLANK, fourth, fifth];
+    let opening = openings[category][index % openings[category].length];
+    if (category === "hobby" && /ライブ|フェス|推し/.test(topic)) opening = ["開演前の列", "チケット握る", "耳に残る声", "駅までの列"][index % 4];
+    if (category === "hobby" && /ゲーム/.test(topic)) opening = ["画面を閉じて", "続きのセーブ", "あと一回だけ", "となりのコントローラ"][index % 4];
+    if (category === "work" && /就活|面接|インターン/.test(topic)) opening = ["慣れないくつで", "改札を出て", "面接のあと", "メールをひらく"][index % 4];
+    if (opening === second) opening = openings[category][(index + 3) % openings[category].length];
+    return [opening === topic ? "ふとしたときに" : opening, second, BLANK, fourth, fifth];
   }
 
   function createProvider(legacyTemplates = []) {
@@ -258,12 +286,13 @@
     function candidates(topic) {
       const category = classify(topic);
       const rows = category === "open" ? scenes.open : [...scenes[category], ...scenes.open.slice(0, 12)];
-      const result = rows.map(([second, fourth, fifth, choices], index) => ({
+      const result = rows.map((row, index) => ({
         templateId: `${category}-${index}`, topic, source: "local",
-        lines: [topic, second, BLANK, fourth, fifth], choices,
+        lines: composeLines(topic, category, index, row), choices: row[3],
       }));
       for (const template of legacyTemplates) {
         if (!template.tags.includes(topic) || template.choices.filter(isAction).length < 2) continue;
+        if (normalizeTopic(template.lines[0]) === topic) continue;
         const draft = { templateId: template.id, topic, source: "local", lines: template.lines, choices: template.choices };
         if (validDraft(draft, topic)) result.push(draft);
       }

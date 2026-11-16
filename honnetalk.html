@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Honne Talk</title>
+    <link rel="stylesheet" href="honnetalk.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="hero" aria-label="Honne Talk">
+        <div class="hero-copy">
+          <p class="eyebrow">学生向け・会話サポート</p>
+          <h1>Honne Talk</h1>
+          <p class="lead">
+            友達との会話が少し深くなるように、今話している内容から「次に聞けるお題」を出す小さなサイトです。
+          </p>
+        </div>
+        <div class="mood-board" aria-hidden="true">
+          <span>最近どう？</span>
+          <strong>ちょっとだけ本音に近づく</strong>
+          <p>話す内容を決めすぎず、自然に聞ける一言を用意します。</p>
+        </div>
+      </section>
+
+      <section class="tool-area">
+        <form class="conversation-form" id="conversationForm">
+          <div class="field">
+            <label for="talkInput">今、友達と話している内容</label>
+            <textarea
+              id="talkInput"
+              rows="7"
+              placeholder="例：授業が忙しい、最近バイトで疲れてる、将来のことが不安、友達関係で少しモヤモヤしてる"
+            ></textarea>
+          </div>
+
+          <div class="field">
+            <label>会話の雰囲気</label>
+            <div class="chip-group" role="group" aria-label="会話の雰囲気">
+              <button type="button" class="chip is-active" data-tone="gentle">やさしく</button>
+              <button type="button" class="chip" data-tone="light">軽めに</button>
+              <button type="button" class="chip" data-tone="deep">深めに</button>
+            </div>
+          </div>
+
+          <button class="main-button" type="submit">お題を考える</button>
+        </form>
+
+        <aside class="result-panel" aria-live="polite">
+          <div class="result-header">
+            <p>次の会話</p>
+            <button type="button" id="shuffleButton" title="別のお題にする">↻</button>
+          </div>
+
+          <div class="result-block">
+            <span>聞いてみるお題</span>
+            <strong id="topicText">話している内容を入力すると、ここにお題が出ます。</strong>
+          </div>
+
+          <div class="result-block">
+            <span>聞き返し方</span>
+            <p id="listenText">相手が話しやすい言い方も一緒に表示します。</p>
+          </div>
+
+          <div class="result-block">
+            <span>自分から言う一言</span>
+            <p id="starterText">本音を押しつけず、自分も少し開く言葉を出します。</p>
+          </div>
+        </aside>
+      </section>
+
+      <section class="quick-topics" aria-label="すぐ使えるお題">
+        <div class="section-title">
+          <p>入力しなくても使える</p>
+          <h2>すぐ話せるお題</h2>
+        </div>
+        <div class="topic-grid">
+          <button type="button" data-preset="最近、前より頑張っていること">最近、前より頑張っていること</button>
+          <button type="button" data-preset="一人で抱えがちな不安">一人で抱えがちな不安</button>
+          <button type="button" data-preset="友達に言われて嬉しかったこと">言われて嬉しかったこと</button>
+          <button type="button" data-preset="将来のことで少し怖いこと">将来のことで少し怖いこと</button>
+        </div>
+      </section>
+    </main>
+
+    <script src="honnetalk.js"></script>
+  </body>
+</html>

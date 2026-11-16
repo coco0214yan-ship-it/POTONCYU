@@ -1,6 +1,6 @@
 (function (root) {
   "use strict";
-  const STORAGE_KEY = "potonchu.reactionSound.v1";
+  const STORAGE_KEY = root.POTONCHU_PREVIEW === true ? "potonchu.preview.reactionSound.v1" : "potonchu.reactionSound.v1";
   let audio = null;
   let enabled = true;
   try { enabled = root.localStorage.getItem(STORAGE_KEY) !== "off"; } catch (error) { /* Optional preference. */ }

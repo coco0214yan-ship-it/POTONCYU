@@ -1,7 +1,8 @@
 const app = document.querySelector("#app");
 const toast = document.querySelector("#toast");
 
-const PREVIEW_MODE = window.POTONCHU_PREVIEW === true;
+const PREVIEW_MODE = window.POTONCHU_PREVIEW === true || (["127.0.0.1", "localhost"].includes(window.location.hostname)
+  && new URLSearchParams(window.location.search).get("demo") === "1");
 const STORAGE_PREFIX = PREVIEW_MODE ? "potonchu.preview" : "potonchu";
 const LEGACY_STORAGE_KEY = `${STORAGE_PREFIX}.prototype.v1`;
 const SHARED_STORAGE_KEY = `${STORAGE_PREFIX}.shared.v2`;
@@ -489,6 +490,7 @@ const backend = {
   talkSubscriptionKey: "",
   talkStatus: new Map(),
   talkSending: new Set(),
+  feelingSending: false,
   seenMemberIds: new Map(),
   notificationStatus: "通知はまだ設定されていません。",
   notificationToken: "",
@@ -527,6 +529,8 @@ let ui = {
   talkDrafts: new Map(),
   talkComposing: false,
   talkRenderPending: false,
+  feelingDrafts: new Map(),
+  consultationComposing: false,
   pendingPhoto: "",
   firebaseNoticeDismissed: false,
   pendingInviteRoomId: new URLSearchParams(window.location.search).get("roomId"),
@@ -578,6 +582,7 @@ function normalizeRoom(room) {
     inviteCode: room.inviteCode || room.id || makeId("invite"),
     members: Array.isArray(room.members) ? room.members.map(normalizeUser) : [],
     messages: Array.isArray(room.messages) ? room.messages.map(normalizeMessage) : [],
+    poemWindow: room.poemWindow?.enabled ? { enabled: true, startedAt: Number(room.poemWindow.startedAt) || room.createdAt } : null,
     createdAt: room.createdAt || Date.now(),
   };
 }
@@ -593,8 +598,10 @@ function normalizeMessage(message) {
     id: message.id || message.messageId || makeId("msg"),
     roomId: message.roomId || "",
     topic: message.topic || "お題",
+    kind: message.kind || "poem",
     lines: Array.isArray(message.lines) ? message.lines : Array.isArray(message.poemLines) ? message.poemLines : [],
     selectedWord: message.selectedWord || "",
+    poemReadings: Array.isArray(message.poemReadings) ? message.poemReadings : [],
     clientId: message.clientId || "",
     status: message.status || "",
     author,
@@ -602,6 +609,7 @@ function normalizeMessage(message) {
     senderName: message.senderName || author.name,
     senderPhoto: message.senderPhoto || author.icon,
     reactions: normalizeReactions(message.reactions),
+    roundIndex: Number.isInteger(message.roundIndex) ? message.roundIndex : null,
     createdAt: toMillis(message.createdAt) || message.createdAtMillis || Date.now(),
   };
 }
@@ -767,6 +775,10 @@ async function signInWithFirebase() {
 }
 
 async function signOutCurrentUser() {
+  ui.topic = "";
+  ui.composer = null;
+  ui.feelingDrafts.clear();
+  feelingQueues.clear();
   if (isFirebaseMode()) {
     await backend.firebase.authModule.signOut(backend.firebase.auth);
   }
@@ -804,6 +816,10 @@ async function loadFirebaseUser(firebaseUser) {
 }
 
 function cleanupFirebaseSubscriptions() {
+  ui.feelingDrafts.clear();
+  feelingQueues.clear();
+  ui.topic = "";
+  ui.composer = null;
   backend.roomUnsubscribe?.();
   backend.roomUnsubscribe = null;
   backend.messageUnsubscribes.forEach((unsubscribe) => unsubscribe());
@@ -892,6 +908,7 @@ function normalizeFirebaseRoom(roomDoc) {
     inviteCode: data.inviteCode || roomDoc.id,
     members: Array.isArray(data.members) ? data.members : [],
     messages: [],
+    poemWindow: data.poemWindow?.enabled ? { enabled: true, startedAt: toMillis(data.createdAt) || data.createdAtMillis } : null,
     createdAt: toMillis(data.createdAt) || data.createdAtMillis,
   });
 }
@@ -905,7 +922,10 @@ function normalizeFirebaseMessage(roomId, messageDoc) {
     lines: data.poemLines,
     poemLines: data.poemLines,
     selectedWord: data.selectedWord,
+    poemReadings: data.poemReadings,
     clientId: data.clientId,
+    kind: data.kind,
+    roundIndex: data.roundIndex,
     senderId: data.senderId,
     senderName: data.senderName,
     senderPhoto: data.senderPhoto,
@@ -931,6 +951,7 @@ function watchRoomMemberChanges(rooms) {
 }
 
 function render() {
+  if (ui.view === "topic" && ui.consultationComposing) return;
   if (ui.view === "talk" && ui.talkComposing) {
     ui.talkRenderPending = true;
     return;
@@ -1012,7 +1033,7 @@ function renderLogin() {
             <p class="brand-subcopy">一首しか送れないチャット。</p>
           </div>
         </div>
-        <p class="login-copy">話したいことを10字で置いて、ことばを選んで、友達にぽとんと送る。一首から、会話がはじまる。</p>
+        <p class="login-copy">そのままでは言いにくいこと。<br />一首にして、話しはじめよう。</p>
         <button type="button" class="google-button" data-action="google-login">
           <span class="google-dot" aria-hidden="true">${PREVIEW_MODE ? "ぽ" : "G"}</span>
           ${PREVIEW_MODE ? "プレビューをはじめる" : "Googleでログイン"}
@@ -1166,7 +1187,7 @@ function renderRoomList() {
                 <strong>${escapeHtml(room.name)}</strong>
                 <span class="room-meta">${room.type === "group" ? "グループ" : "1対1"} ・ ${room.members.length}人 ・ ${room.messages.length}首 ・ ${formatDate(room.createdAt)}</span>
               </span>
-              <span class="room-kind">${getYesterdayReflection(room) ? "昨日のぽとん" : room.type === "group" ? "グループ" : "1対1"}</span>
+              <span class="room-kind">${PotonchuRounds.state(room, appState.user.id).phase === "open" ? "今日のぽとん" : getYesterdayReflection(room) ? "昨日のぽとん" : room.type === "group" ? "グループ" : "1対1"}</span>
             </button>
           `,
         )
@@ -1213,15 +1234,22 @@ function renderCreateRoom() {
             使い方
             <div class="room-type-grid">
               <label class="room-type">
-                <input type="radio" name="roomType" value="pair" checked />
+                <input type="radio" name="roomType" value="pair" />
                 <span>1対1</span>
               </label>
               <label class="room-type">
-                <input type="radio" name="roomType" value="group" />
+                <input type="radio" name="roomType" value="group" checked />
                 <span>グループ</span>
               </label>
             </div>
           </div>
+          <details class="round-experiment">
+            <summary>時間のルールを試す（任意）</summary>
+            <label class="round-setting">
+              <input type="checkbox" name="poemWindow" />
+              <span>12時間のぽとん<span class="small-note">24時間ごとに、最初の12時間だけ1人1首。</span></span>
+            </label>
+          </details>
           <button type="submit" class="primary-button">ルームを作る</button>
         </form>
         ${createdRoom ? renderCreatedRoom(createdRoom) : ""}
@@ -1261,10 +1289,6 @@ function renderChat() {
           <h1>${escapeHtml(room.name)}</h1>
         </div>
         <div class="chat-tools">
-          <label class="reaction-sound-toggle" title="リアクションの音を切り替える">
-            <input type="checkbox" data-setting="reaction-sound" aria-label="リアクションの音" ${PotonchuFeedback.enabled ? "checked" : ""} />
-            <span>音</span>
-          </label>
           <div class="participant-stack" aria-label="参加者">
             ${room.members.map((member) => renderAvatar(member, "avatar small", member.name)).join("")}
           </div>
@@ -1272,14 +1296,15 @@ function renderChat() {
       </header>
 
       <section class="message-list" aria-label="一首チャット">
+        ${renderRoundNotice(room)}
         ${renderRoomStatus(room)}
         ${renderReflectionCard(room)}
         ${renderMessages(room)}
       </section>
 
       <section class="composer-dock">
-        <p class="dock-note">ここに届くのは、完成した一首だけ。</p>
-        <button type="button" class="primary-button" data-action="go-topic">一首をつくる</button>
+        <p class="dock-note">言えないことから、話しはじめる。</p>
+        <button type="button" class="primary-button" data-action="go-topic" data-poem-entry ${PotonchuRounds.state(room, appState.user.id).canSend ? "" : "disabled"}>気持ちを一首にする</button>
       </section>
     </section>
   `;
@@ -1456,12 +1481,42 @@ function renderRoomStatus(room) {
   return "";
 }
 
+function roundCopy(room, now = Date.now()) {
+  const round = PotonchuRounds.state(room, appState.user?.id, now);
+  if (round.phase === "unlimited") return "";
+  if (round.phase === "waiting") return `次のぽとんまで ${PotonchuRounds.remaining(round.nextAt, now)}`;
+  if (round.phase === "closed") return `今日の受付はおしまい。次のぽとんまで ${PotonchuRounds.remaining(round.nextAt, now)}`;
+  if (round.phase === "sent") return `今日の一首は届きました。次は ${PotonchuRounds.remaining(round.nextAt, now)}後。お話はこのまま。`;
+  return `${round.index > 0 ? "今日のぽとんが始まりました。" : "今日のぽとん"} あと ${PotonchuRounds.remaining(round.closesAt, now)}。ひとり一首。`;
+}
+
+function renderRoundNotice(room) {
+  if (!room?.poemWindow?.enabled) return "";
+  const round = PotonchuRounds.state(room, appState.user?.id);
+  return `<aside class="round-notice ${round.canSend ? "is-open" : ""}" role="status"><span data-round-copy>${escapeHtml(roundCopy(room))}</span></aside>`;
+}
+
+function feelingGenerationNote() {
+  return window.POTONCHU_FEELING_CONFIG?.enabled && isFirebaseMode()
+    ? "一首をつくるために、この入力をAIに送ります。相手には一首だけ届きます。"
+    : "試作モード：今は定型の候補を表示します。AI生成はまだ未接続です。";
+}
+
+function refreshRoundUI() {
+  const room = currentRoom();
+  if (!room || !appState.user) return;
+  const round = PotonchuRounds.state(room, appState.user.id);
+  document.querySelectorAll("[data-round-copy]").forEach((node) => { node.textContent = roundCopy(room); });
+  document.querySelectorAll(".round-notice").forEach((node) => { node.classList.toggle("is-open", round.canSend); });
+  document.querySelectorAll("[data-poem-entry]").forEach((button) => { button.disabled = !round.canSend || backend.feelingSending; });
+}
+
 function renderMessages(room) {
   if (room.messages.length === 0) {
     return `
       <div class="empty-state">
         <p>まだ一首は届いていません。</p>
-        <button type="button" class="primary-button" data-action="go-topic">一首をつくる</button>
+        <button type="button" class="primary-button" data-action="go-topic" data-poem-entry ${PotonchuRounds.state(room, appState.user.id).canSend ? "" : "disabled"}>最初の気持ちを、一首に</button>
         <button type="button" class="copy-button" data-action="copy-invite" data-room-id="${escapeAttribute(room.id)}">招待リンクをコピー</button>
       </div>
     `;
@@ -1477,9 +1532,6 @@ function renderMessages(room) {
 function renderMessage(message, room) {
   const isMine = message.author.id === appState.user.id;
   const statusText = message.status === "sending" ? " ・ 送信中" : message.status === "failed" ? " ・ 送れませんでした" : "";
-  const canReact = !message.status;
-  const reactionError = backend.reactionErrors.get(message.id);
-  const pulse = ui.reactionPulse?.messageId === message.id && ui.reactionPulse.until > Date.now() ? ui.reactionPulse : null;
   return `
     <article class="message-row ${isMine ? "is-mine" : ""}">
       <div class="message-meta ${isMine ? "is-mine" : ""}">
@@ -1491,16 +1543,11 @@ function renderMessage(message, room) {
         <span class="message-topic">${escapeHtml(message.topic)}</span>
         <span class="poem-lines">${message.lines.map((line) => `<span class="poem-line">${escapeHtml(line)}</span>`).join("")}</span>
         </button>
-        <div class="reaction-row" aria-label="ついているリアクション">${renderReactionSummary(message, room)}</div>
-        ${pulse ? `<span class="reaction-pop" aria-hidden="true">${escapeHtml(pulse.label)}</span>` : ""}
         <div class="message-footer">
           <button type="button" class="mini-button" data-action="favorite-message" data-message-id="${escapeAttribute(message.id)}">お気に入りにする</button>
-          <button type="button" class="mini-button talk-toggle" data-action="open-talk" data-message-id="${escapeAttribute(message.id)}" ${message.status ? "disabled" : ""}>この一首のトーク</button>
-          <button type="button" class="mini-button reaction-toggle" data-action="toggle-reaction-picker" data-message-id="${escapeAttribute(message.id)}" aria-expanded="${ui.openReactionFor === message.id}" aria-controls="reactions-${escapeAttribute(message.id)}" ${canReact ? "" : "disabled"}>＋ リアクション</button>
+          <button type="button" class="talk-toggle conversation-start" data-action="open-talk" data-message-id="${escapeAttribute(message.id)}" ${message.status ? "disabled" : ""}>この一首から話す <span aria-hidden="true">↗</span></button>
         </div>
-        ${reactionError ? `<p class="reaction-error" role="status">${escapeHtml(reactionError)}</p>` : ""}
       </div>
-      ${ui.openReactionFor === message.id ? renderReactionPicker(message, room) : ""}
     </article>
   `;
 }
@@ -1548,7 +1595,7 @@ function renderReflectionCard(room) {
         ${renderPoemLines(reflection.message.lines)}
       </div>
       <p>${escapeHtml(reflection.question)}</p>
-      <button type="button" class="primary-button" data-action="reply-yesterday">今日の一首で返す</button>
+      <button type="button" class="primary-button" data-action="open-talk" data-message-id="${escapeAttribute(reflection.message.id)}">昨日の一首から話す</button>
     </section>
   `;
 }
@@ -1566,32 +1613,19 @@ function renderTopic() {
       <div class="topic-panel">
         <div class="topic-title">
           <p class="eyebrow">${escapeHtml(current.name)}</p>
-          <h1>話したいお題を10字以内で</h1>
+          <h1>ほんとは、<br />なんて言いたい？</h1>
         </div>
         <form class="topic-form" data-form="topic">
+          ${renderRoundNotice(current)}
           <label class="field-label">
-            お題
-            <input id="topicInput" name="topic" value="${escapeAttribute(ui.topic)}" placeholder="例：テストやばい、雨の帰り道" autocomplete="off" />
+            相手に伝えたいこと
+            <textarea id="topicInput" name="topic" rows="6" placeholder="いつも誘ってくれてうれしい。でも、今日は少しひとりで休みたい。" autocomplete="off">${escapeHtml(ui.topic)}</textarea>
           </label>
           <div class="counter-row" id="topicCounter">
-            <span>好きなお題を自由に</span>
-            <span id="topicCount">残り10字</span>
+            <span>この下書きは、相手には届きません。</span>
+            <span id="topicCount">0 / 500</span>
           </div>
-          <div class="topic-example-wrap" aria-label="おすすめお題">
-            <p class="topic-hint">おすすめお題</p>
-            ${topicGroups
-              .map(
-                (group) => `
-                  <section class="topic-group">
-                    <h2>${escapeHtml(group.label)}</h2>
-                    <div class="topic-examples">
-                      ${group.topics.map((topic) => `<button type="button" class="topic-chip" data-action="use-topic" data-topic="${escapeAttribute(topic)}">${escapeHtml(topic)}</button>`).join("")}
-                    </div>
-                  </section>
-                `,
-              )
-              .join("")}
-          </div>
+          <p class="generation-note">${feelingGenerationNote()}</p>
           <button type="submit" class="primary-button" id="topicSubmit">一首ガチャを回す</button>
         </form>
       </div>
@@ -1609,14 +1643,14 @@ function renderGacha() {
   if (composer.step === "loading") {
     return `
       <section class="screen composer-screen">
-        ${renderTopbar(`<button type="button" class="back-button" data-action="go-topic">お題へ</button>`)}
+        ${renderTopbar(`<button type="button" class="back-button" data-action="go-topic">書き直す</button>`)}
         <div class="gacha-panel">
           <div class="gacha-head">
             <div class="gacha-title">
               <p class="eyebrow">isshu gacha</p>
               <h1>一首ガチャ</h1>
             </div>
-            <span class="topic-badge">${escapeHtml(composer.topic)}</span>
+            <span class="topic-badge">あなたの気持ちから</span>
           </div>
           <div class="machine-wrap">
             <div>
@@ -1652,14 +1686,14 @@ function renderGacha() {
   const poemMode = isDropping ? "dropping" : isResting ? "settled" : "blank";
   return `
     <section class="screen composer-screen">
-      ${renderTopbar(`<button type="button" class="back-button" data-action="go-topic">お題へ</button>`)}
+      ${renderTopbar(`<button type="button" class="back-button" data-action="go-topic">書き直す</button>`)}
       <div class="gacha-panel">
         <div class="gacha-head">
           <div class="gacha-title">
             <p class="eyebrow">isshu gacha</p>
             <h1>穴あき一首</h1>
           </div>
-          <span class="topic-badge">${escapeHtml(composer.topic)}</span>
+          <span class="topic-badge">${composer.mode === "feeling" ? "五・七・五・七・七" : escapeHtml(composer.topic)}</span>
         </div>
         <section class="poem-stage">
           <div class="poem-paper">
@@ -1672,7 +1706,7 @@ function renderGacha() {
                   ${composer.draft.choices
                     .map(
                       (choice) => `
-                        <button type="button" class="choice-button ${choice === composer.selectedChoice ? "is-picked" : ""}" data-action="choose-word" data-choice="${escapeAttribute(choice)}" ${isDropping ? "disabled" : ""}>
+                        <button type="button" class="choice-button ${choice === composer.selectedChoice ? "is-picked" : ""}" data-action="choose-word" data-choice="${escapeAttribute(choice)}" ${composer.mode === "feeling" ? `title="${escapeAttribute(composer.draft.choiceReadings[composer.draft.choices.indexOf(choice)])}・5音"` : ""} ${isDropping ? "disabled" : ""}>
                           ${escapeHtml(choice)}
                         </button>
                       `,
@@ -1686,7 +1720,7 @@ function renderGacha() {
             ? ""
             : `<div class="gacha-actions">
                 <button type="button" class="subtle-button" data-action="reroll">引き直し</button>
-                <button type="button" class="ghost-button" data-action="go-topic">お題を変える</button>
+                <button type="button" class="ghost-button" data-action="go-topic">気持ちを書き直す</button>
                 <button type="button" class="ghost-button" data-action="go-chat">チャットへ</button>
               </div>`
         }
@@ -1698,6 +1732,7 @@ function renderGacha() {
 function renderConfirm() {
   const composer = ui.composer;
   const lines = completePoemLines(composer.draft, composer.selectedChoice);
+  const canSend = PotonchuRounds.state(currentRoom(), appState.user.id).canSend;
   return `
     <section class="screen composer-screen">
       ${renderTopbar(`<button type="button" class="back-button" data-action="go-chat">チャットへ</button>`)}
@@ -1705,7 +1740,7 @@ function renderConfirm() {
         <div>
           <p class="eyebrow">send</p>
           <h1>この一首で送る？</h1>
-          <p class="confirm-copy">説明は足さず、一首だけ届きます。</p>
+          <p class="confirm-copy">言いたかった気持ちに、近いかな。</p>
         </div>
         <div class="poem-stage">
           <div class="poem-paper">
@@ -1713,10 +1748,13 @@ function renderConfirm() {
           </div>
         </div>
         <div class="confirm-actions">
-          <button type="button" class="send-button" data-action="send-poem">この一首を送る</button>
+          <button type="button" class="send-button" data-action="send-poem" data-poem-entry ${canSend ? "" : "disabled"}>この一首を送る</button>
           <button type="button" class="subtle-button" data-action="reroll">もう一回まわす</button>
-          <button type="button" class="ghost-button" data-action="choose-again">選び直す</button>
+          <button type="button" class="ghost-button" data-action="choose-again">ことばを選び直す</button>
+          <button type="button" class="ghost-button" data-action="go-topic">気持ちを書き直す</button>
         </div>
+        <p class="generation-note">${composer.draft.source === "ai" ? "入力した下書きは添えず、この一首だけを届けます。" : "試作の候補です。まだAI生成ではありません。"}</p>
+        ${renderRoundNotice(currentRoom())}
       </div>
     </section>
   `;
@@ -1836,8 +1874,12 @@ async function handleClick(event) {
   }
 
   if (action === "go-topic") {
+    if (!PotonchuRounds.state(currentRoom(), appState.user.id).canSend) {
+      showToast("今は一首の受付時間外か、今日の一首を送ったあとです。お話は続けられます。");
+      return;
+    }
     ui.view = "topic";
-    ui.topic = "";
+    ui.topic = ui.feelingDrafts.get(appState.activeRoomId) || "";
     ui.composer = null;
     render();
     return;
@@ -1962,7 +2004,7 @@ async function handleSubmit(event) {
       return;
     }
 
-    const room = await createRoom(name, type);
+    const room = await createRoom(name, type, form.elements.namedItem("poemWindow").checked);
     await setActiveRoom(room.id);
     ui.createResultId = room.id;
     render();
@@ -1971,14 +2013,14 @@ async function handleSubmit(event) {
   }
 
   if (form.dataset.form === "topic") {
-    const topic = form.topic.value.trim();
+    const topic = PotonchuFeelings.normalize(form.topic.value);
     const count = countChars(topic);
     if (!topic) {
-      showToast("お題を入れてください。");
+      showToast("相手に伝えたいことを入れてください。");
       return;
     }
-    if (count > 10) {
-      showToast("お題は10字以内です。");
+    if (count > PotonchuFeelings.MAX_INPUT) {
+      showToast("気持ちは500字以内で入れてください。");
       return;
     }
     ui.topic = topic;
@@ -2009,6 +2051,7 @@ function handleInput(event) {
   }
   if (event.target.id !== "topicInput") return;
   ui.topic = event.target.value;
+  ui.feelingDrafts.set(appState.activeRoomId, ui.topic);
   updateTopicCounter();
 }
 
@@ -2026,7 +2069,7 @@ async function routeAfterAuth() {
   render();
 }
 
-async function createRoom(name, type) {
+async function createRoom(name, type, useWindow = false) {
   const id = makeId("room");
   const room = {
     id,
@@ -2037,6 +2080,7 @@ async function createRoom(name, type) {
     members: createMembersForRoom(type),
     messages: [],
     createdAt: Date.now(),
+    poemWindow: useWindow ? { enabled: true, startedAt: Date.now() } : null,
   };
   if (isFirebaseMode()) {
     const { firestoreModule, db } = backend.firebase;
@@ -2049,6 +2093,7 @@ async function createRoom(name, type) {
       members: createMembersForRoom(type),
       createdAt: firestoreModule.serverTimestamp(),
       createdAtMillis: room.createdAt,
+      poemWindow: room.poemWindow,
     });
     upsertLocalRoom(room);
     return room;
@@ -2217,25 +2262,34 @@ async function setActiveRoom(roomId) {
 }
 
 async function spinGacha(topic, previousTemplateId = "") {
-  topic = PotonchuPoems.normalizeTopic(topic);
-  if (!topic || countChars(topic) > 10) {
-    showToast("お題は1〜10字で入れてください。");
+  topic = PotonchuFeelings.normalize(topic);
+  if (!topic || countChars(topic) > PotonchuFeelings.MAX_INPUT) {
+    showToast("伝えたいことを1〜500字で入れてください。");
     return;
   }
+  const room = currentRoom();
+  if (!room || !PotonchuRounds.state(room, appState.user.id).canSend) {
+    showToast("今日の一首は、次のぽとんの時間に。");
+    return;
+  }
+  ui.feelingDrafts.set(room.id, topic);
   ui.view = "gacha";
   const composer = {
     topic,
+    roomId: room.id,
+    mode: "feeling",
+    clientId: makeId("feeling"),
     step: "loading",
     draft: null,
     selectedChoice: "",
-    loadingCopy: pickOne(gachaCaptions),
+    loadingCopy: window.POTONCHU_FEELING_CONFIG?.enabled && isFirebaseMode() ? "あなたの気持ちを、一首にしています" : "ことばを、ころころ中",
   };
   ui.composer = composer;
   render();
 
   try {
     const [draft] = await Promise.all([
-      generatePoem(topic, previousTemplateId, appState.activeRoomId),
+      generateFeelingPoem(topic, previousTemplateId, room.id),
       new Promise((resolve) => window.setTimeout(resolve, 1700)),
     ]);
     if (ui.composer !== composer || ui.view !== "gacha") return;
@@ -2246,24 +2300,25 @@ async function spinGacha(topic, previousTemplateId = "") {
     if (ui.composer !== composer || ui.view !== "gacha") return;
     ui.view = "topic";
     render();
-    showToast("一首を用意できませんでした。もう一度まわしてみてください。");
+    showToast("AIにうまくつながりませんでした。入力は残しています。もう一度試してください。");
   }
 }
 
 function chooseWord(choice) {
   if (!ui.composer || ui.composer.step !== "gacha") return;
   if (!ui.composer.draft?.choices.includes(choice)) return;
+  if (ui.composer.mode === "feeling" && !PotonchuFeelings.complete(ui.composer.draft, choice)) return;
   ui.composer.selectedChoice = choice;
   ui.composer.step = "dropping";
   render();
 
   const composer = ui.composer;
   window.setTimeout(() => {
-    if (ui.composer !== composer || ui.composer.selectedChoice !== choice) return;
+    if (ui.composer !== composer || ui.composer.selectedChoice !== choice || ui.view !== "gacha") return;
     ui.composer.step = "resting";
     render();
     window.setTimeout(() => {
-      if (ui.composer !== composer || ui.composer.selectedChoice !== choice || ui.composer.step !== "resting") return;
+      if (ui.composer !== composer || ui.composer.selectedChoice !== choice || ui.composer.step !== "resting" || ui.view !== "gacha") return;
       ui.composer.step = "confirm";
       render();
     }, 1050);
@@ -2271,6 +2326,7 @@ function chooseWord(choice) {
 }
 
 async function sendPoem() {
+  if (ui.composer?.mode === "feeling") return sendFeelingPoem();
   const room = currentRoom();
   const composer = ui.composer;
   if (!room || !composer?.draft || composer.step !== "confirm" || !composer.draft.choices.includes(composer.selectedChoice)) return;
@@ -2675,8 +2731,81 @@ function resizeImageToDataUrl(file, size) {
 
 const poemProvider = PotonchuPoems.createProvider(poemLibrary);
 const aiPoemQueues = new Map();
+const feelingQueues = new Map();
 let aiCallable = null;
 let aiUnavailableUntil = 0;
+
+async function feelingCallable(name) {
+  const functionsModule = await import(`https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}/firebase-functions.js`);
+  return functionsModule.httpsCallable(functionsModule.getFunctions(backend.firebase.app,
+    window.POTONCHU_FEELING_CONFIG?.region || "asia-northeast1"), name, { timeout: 25000 });
+}
+
+async function generateFeelingPoem(input, previousId, roomId) {
+  if (!window.POTONCHU_FEELING_CONFIG?.enabled || !isFirebaseMode()) return PotonchuFeelings.sample(input, previousId);
+  const userId = appState.user.id;
+  const key = JSON.stringify([userId, roomId, input]);
+  const entry = feelingQueues.get(key) || { poems: [], recent: [] };
+  if (!entry.poems.length) {
+    const generate = await feelingCallable("generateFeelingPoems");
+    if (appState.user?.id !== userId) throw new Error("generation-session-changed");
+    const result = await generate({ input, roomId, avoid: entry.recent.slice(-5) });
+    if (appState.user?.id !== userId) throw new Error("generation-session-changed");
+    entry.poems = (result.data?.poems || []).filter((poem) => PotonchuFeelings.validDraft(poem)
+      && !entry.recent.some((lines) => lines.join("\n") === poem.lines.join("\n")));
+  }
+  const draft = entry.poems.shift();
+  if (!draft) throw new Error("generation-invalid");
+  entry.recent = [...entry.recent, draft.lines].slice(-5);
+  if (feelingQueues.size >= 20 && !feelingQueues.has(key)) feelingQueues.delete(feelingQueues.keys().next().value);
+  feelingQueues.set(key, entry);
+  return { ...draft, source: "ai" };
+}
+
+async function sendFeelingPoem() {
+  const room = currentRoom();
+  const composer = ui.composer;
+  const completed = composer?.draft && PotonchuFeelings.complete(composer.draft, composer.selectedChoice);
+  if (!room || composer?.roomId !== room.id || composer.step !== "confirm" || backend.feelingSending || !completed) return;
+  const round = PotonchuRounds.state(room, appState.user.id);
+  if (!round.canSend) { refreshRoundUI(); showToast("今日の一首は、次のぽとんの時間に。お話は続けられます。"); return; }
+  const user = normalizeUser(appState.user);
+  const message = {
+    id: composer.clientId, clientId: composer.clientId, kind: "poem", roomId: room.id,
+    topic: "今日のぽとん", lines: completed.lines, poemReadings: completed.readings, selectedWord: composer.selectedChoice, author: user,
+    senderId: user.id, senderName: user.name, senderPhoto: getAvatarImage(user) || user.icon,
+    reactions: {}, roundIndex: round.index, createdAt: Date.now(),
+  };
+  backend.feelingSending = true;
+  refreshRoundUI();
+  try {
+    if (isFirebaseMode()) {
+      const send = await feelingCallable("sendFeelingPoem");
+      if (appState.user?.id !== user.id) return;
+      const result = await send({ roomId: room.id, clientId: composer.clientId, poemLines: message.lines, selectedWord: message.selectedWord });
+      message.id = result.data.messageId;
+      message.createdAt = result.data.createdAtMillis;
+      if (appState.user?.id !== user.id) return;
+    }
+    upsertLocalMessage(room.id, message);
+    ui.feelingDrafts.delete(room.id);
+    if (ui.composer === composer) {
+      ui.composer = null;
+      ui.topic = "";
+      ui.view = "chat";
+      render();
+    }
+    showToast("ぽとんと届きました");
+  } catch (error) {
+    if (appState.user?.id !== user.id) return;
+    showToast(error.code === "functions/already-exists" ? "今日の一首は、もう届いています。"
+      : error.code === "functions/failed-precondition" ? "一首の受付時間が終わりました。お話は続けられます。"
+      : "まだ届いていません。一首を残しているので、もう一度送れます。");
+  } finally {
+    backend.feelingSending = false;
+    refreshRoundUI();
+  }
+}
 
 async function generatePoem(topic, previousTemplateId, roomId) {
   const config = window.POTONCHU_GENERATION_CONFIG || {};
@@ -2743,10 +2872,10 @@ function updateTopicCounter() {
   if (!input || !countTarget || !counter || !submit) return;
 
   const count = countChars(input.value.trim());
-  const remaining = 10 - count;
-  countTarget.textContent = remaining >= 0 ? `残り${remaining}字` : `${Math.abs(remaining)}字オーバー`;
+  const remaining = PotonchuFeelings.MAX_INPUT - count;
+  countTarget.textContent = `${count} / ${PotonchuFeelings.MAX_INPUT}`;
   counter.classList.toggle("is-over", remaining < 0);
-  submit.disabled = count === 0 || remaining < 0;
+  submit.disabled = count === 0 || remaining < 0 || !PotonchuRounds.state(currentRoom(), appState.user?.id).canSend;
 }
 
 async function copyInvite(roomId) {
@@ -2885,8 +3014,14 @@ app.addEventListener("submit", handleSubmit);
 app.addEventListener("input", handleInput);
 app.addEventListener("compositionstart", (event) => {
   if (event.target.id === "talkReplyInput") ui.talkComposing = true;
+  if (event.target.id === "topicInput") ui.consultationComposing = true;
 });
 app.addEventListener("compositionend", (event) => {
+  if (event.target.id === "topicInput") {
+    ui.consultationComposing = false;
+    handleInput(event);
+    return;
+  }
   if (event.target.id !== "talkReplyInput") return;
   ui.talkComposing = false;
   handleInput(event);
@@ -2906,3 +3041,7 @@ document.addEventListener("keydown", (event) => {
 
 render();
 initBackend();
+if (window.setInterval) window.setInterval(() => {
+  refreshRoundUI();
+  if (ui.view === "topic") updateTopicCounter();
+}, 15000);

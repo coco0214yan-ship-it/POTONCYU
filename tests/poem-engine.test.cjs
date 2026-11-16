@@ -11,7 +11,9 @@ test("free topics have at least 22 distinct poems before any repeat", () => {
     for (let i = 0; i < provider.count(topic); i += 1) {
       const draft = provider.generate(topic, previous);
       assert.ok(validDraft(draft, topic), `${topic}: invalid draft`);
-      assert.equal(draft.lines[0], topic);
+      assert.notEqual(draft.lines[0], topic);
+      assert.notEqual(draft.lines[0], draft.lines[1]);
+      assert.equal(draft.topic, topic);
       const signature = draft.lines.join("\n");
       assert.ok(!seen.has(signature), `${topic}: repeated too early`);
       seen.add(signature);
@@ -33,7 +35,7 @@ test("free topics are matched by meaning words, not a single shared character", 
 
 test("invalid AI output is rejected and repeated AI poems are skipped", () => {
   const provider = createProvider();
-  const draft = { templateId: "ai-1", lines: ["帰り道", "改札の前で", BLANK, "さよならだけが", "少し遅れる"], choices: ["待っている", "言えなかった", "まだいたい", "コンビニ"] };
+  const draft = { templateId: "ai-1", topic: "帰り道", lines: ["夕方の駅", "改札の前で", BLANK, "さよならだけが", "少し遅れる"], choices: ["待っている", "言えなかった", "まだいたい", "コンビニ"] };
   assert.equal(provider.accept("帰り道", { ...draft, lines: [...draft.lines, "解説"] }), null);
   assert.equal(provider.accept("帰り道", { ...draft, choices: ["本音", "本音", "本音", "本音"] }), null);
   assert.equal(provider.accept("違うお題", draft), null);
