@@ -2872,9 +2872,10 @@ function updateTopicCounter() {
   if (!input || !countTarget || !counter || !submit) return;
 
   const count = countChars(String(input.value ?? "").trim());
-  const remaining = PotonchuFeelings.MAX_INPUT - count;
-  countTarget.textContent = `${count} / ${PotonchuFeelings.MAX_INPUT}`;
-  counter.classList.toggle("is-over", remaining < 0);
+  const maxInput = typeof PotonchuFeelings !== "undefined" ? PotonchuFeelings.MAX_INPUT : 200;
+  const remaining = maxInput - count;
+  countTarget.textContent = `${count} / ${maxInput}`;
+  counter.classList.toggle?.("is-over", remaining < 0);
   submit.disabled = count === 0 || remaining < 0 || !PotonchuRounds.state(currentRoom(), appState.user?.id).canSend;
 }
 
