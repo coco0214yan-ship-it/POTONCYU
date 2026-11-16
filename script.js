@@ -2871,7 +2871,7 @@ function updateTopicCounter() {
   const submit = document.querySelector("#topicSubmit");
   if (!input || !countTarget || !counter || !submit) return;
 
-  const count = countChars(input.value.trim());
+  const count = countChars(String(input.value ?? "").trim());
   const remaining = PotonchuFeelings.MAX_INPUT - count;
   countTarget.textContent = `${count} / ${PotonchuFeelings.MAX_INPUT}`;
   counter.classList.toggle("is-over", remaining < 0);
