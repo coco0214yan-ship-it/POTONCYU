@@ -130,3 +130,22 @@ body:has(.chat-shell) .preview-notice { flex: 0 0 auto; }
 /* スマホ通知：停止ボタンとテストボタンの間をあける */
 .notification-box .copy-button + .copy-button { margin-top: 10px; }
 .notification-box .copy-button { display: block; }
+
+/* お知らせ（トースト）は下のメニューより手前に、メニューの上へ出す */
+.toast { z-index: 80; bottom: calc(92px + env(safe-area-inset-bottom, 0px)); }
+/* スマホ幅では、入力欄と送信ボタンに重ならない高さに、中央寄せで出す */
+@media (max-width: 720px) {
+  .toast { right: auto; left: 50%; bottom: calc(200px + env(safe-area-inset-bottom, 0px)); width: max-content; transform: translate(-50%, 12px); }
+  .toast.is-visible { transform: translate(-50%, 0); }
+}
+
+/* 招待のQR・リンク */
+.invite-overlay { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; padding: 16px; background: rgba(74, 52, 38, 0.45); overflow-y: auto; }
+.invite-dialog { width: min(100%, 380px); padding: 22px 20px 18px; border: 1px solid var(--line); border-radius: 24px; background: var(--milk); box-shadow: 0 18px 40px rgba(74, 52, 38, 0.28); text-align: center; }
+.invite-dialog h2 { margin: 2px 0 6px; font-size: 1.25rem; overflow-wrap: anywhere; }
+.invite-qr { width: min(240px, 70vw); margin: 14px auto; padding: 8px; border-radius: 16px; background: #fff; }
+.invite-qr svg { display: block; width: 100%; height: auto; }
+.invite-dialog .field-label { display: block; text-align: left; }
+.invite-link { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--line); border-radius: 14px; background: #fff; color: var(--cocoa-dark); font: inherit; font-size: 0.82rem; line-height: 1.5; word-break: break-all; resize: none; }
+.invite-status { min-height: 1.5em; margin: 8px 0 4px; font-size: 0.9rem; color: var(--cocoa-dark); }
+.invite-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }

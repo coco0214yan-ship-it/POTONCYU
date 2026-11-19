@@ -1334,7 +1334,7 @@ function renderCreatedRoom(room) {
       <strong>${escapeHtml(room.name)}を作りました。</strong>
       <span class="invite-link">${escapeHtml(inviteLink)}</span>
       <div class="gacha-actions">
-        <button type="button" class="copy-button" data-action="copy-invite" data-room-id="${escapeAttribute(room.id)}">招待リンクをコピー</button>
+        <button type="button" class="copy-button" data-action="copy-invite" data-room-id="${escapeAttribute(room.id)}">招待する（QR・リンク）</button>
         <button type="button" class="primary-button" data-action="open-room" data-room-id="${escapeAttribute(room.id)}">チャットを開く</button>
         <button type="button" class="ghost-button" data-action="go-home">トーク一覧へ</button>
       </div>
@@ -1562,7 +1562,7 @@ function renderRoomStatus(room) {
     return `
       <div class="room-status-card">
         <p>まだ相手がいません。招待リンクを送ってみる。</p>
-        <button type="button" class="copy-button" data-action="copy-invite" data-room-id="${escapeAttribute(room.id)}">招待リンクをコピー</button>
+        <button type="button" class="copy-button" data-action="copy-invite" data-room-id="${escapeAttribute(room.id)}">招待する（QR・リンク）</button>
       </div>
     `;
   }
@@ -1877,8 +1877,12 @@ async function handleClick(event) {
   const action = button.dataset.action;
 
   if (action === "copy-login-link") {
-    await copyText(window.location.href);
-    showToast("URLをコピーしました。SafariかChromeで貼り付けて開いてください。");
+    try {
+      await copyText(window.location.href);
+      showToast("URLをコピーしました。SafariかChromeで貼り付けて開いてください。");
+    } catch {
+      showToast("コピーできませんでした。右上のメニューから「ブラウザで開く」を選んでください。");
+    }
     return;
   }
 
@@ -2106,7 +2110,7 @@ async function handleClick(event) {
   }
 
   if (action === "copy-invite") {
-    await copyInvite(button.dataset.roomId);
+    openInviteDialog(button.dataset.roomId);
   }
 }
 
@@ -3239,11 +3243,76 @@ function updateTopicCounter() {
   submit.disabled = count === 0 || remaining < 0;
 }
 
-async function copyInvite(roomId) {
+// 招待：QRコードとリンクを画面の上に重ねて表示する。
+// #app の外に置くので、トークの更新で画面が描き直されても閉じない。
+function openInviteDialog(roomId) {
   const room = findRoom(roomId);
-  if (!room) return;
-  await copyText(makeInviteLink(room.id));
-  showToast("招待リンクをコピーしました。");
+  if (!room) { showToast("招待するルームが見つかりません。もう一度開いてください。"); return; }
+  closeInviteDialog();
+  const link = makeInviteLink(room.id);
+  const overlay = document.createElement("div");
+  overlay.id = "inviteDialog";
+  overlay.className = "invite-overlay";
+  overlay.innerHTML = `
+    <div class="invite-dialog" role="dialog" aria-modal="true" aria-labelledby="inviteTitle">
+      <p class="eyebrow">invite</p>
+      <h2 id="inviteTitle">${escapeHtml(room.name)}に招待</h2>
+      <p class="small-note">QRコードを読み取ってもらうか、下のリンクを送ってください。</p>
+      <div class="invite-qr">${makeQrSvg(link) || '<p class="small-note">QRコードを表示できませんでした。下のリンクを送ってください。</p>'}</div>
+      <label class="field-label" for="inviteLink">招待リンク</label>
+      <textarea id="inviteLink" class="invite-link" rows="4" readonly>${escapeHtml(link)}</textarea>
+      <p class="invite-status" role="status" aria-live="polite"></p>
+      <div class="invite-actions">
+        <button type="button" class="primary-button" data-invite="copy">リンクをコピー</button>
+        <button type="button" class="ghost-button" data-invite="close">閉じる</button>
+      </div>
+    </div>
+  `;
+  const field = overlay.querySelector("#inviteLink");
+  const status = overlay.querySelector(".invite-status");
+  overlay.addEventListener("click", async (event) => {
+    if (event.target === overlay || event.target.closest('[data-invite="close"]')) { closeInviteDialog(); return; }
+    if (event.target === field) { field.select(); return; }
+    if (!event.target.closest('[data-invite="copy"]')) return;
+    try {
+      await copyText(link);
+      status.textContent = "リンクをコピーしました。";
+    } catch {
+      // コピーできないブラウザでは、選択した状態にして手で写せるようにする。
+      field.focus();
+      field.select();
+      status.textContent = "コピーできませんでした。リンクを長押しして写してください。";
+    }
+  });
+  overlay.addEventListener("keydown", (event) => { if (event.key === "Escape") closeInviteDialog(); });
+  document.body.appendChild(overlay);
+  overlay.querySelector('[data-invite="copy"]').focus();
+}
+
+function closeInviteDialog() {
+  document.querySelector("#inviteDialog")?.remove();
+}
+
+// リンクをQRコード（SVG）にする。qrcode.js を読み込めなかった時は空文字。
+function makeQrSvg(text) {
+  if (typeof qrcode !== "function") return "";
+  try {
+    const code = qrcode(0, "M");
+    code.addData(text);
+    code.make();
+    const count = code.getModuleCount();
+    const quiet = 4;
+    let path = "";
+    for (let row = 0; row < count; row += 1) {
+      for (let column = 0; column < count; column += 1) {
+        if (code.isDark(row, column)) path += `M${column + quiet} ${row + quiet}h1v1h-1z`;
+      }
+    }
+    const size = count + quiet * 2;
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" role="img" aria-label="招待リンクのQRコード" shape-rendering="crispEdges"><rect width="${size}" height="${size}" fill="#fff"/><path d="${path}" fill="#000"/></svg>`;
+  } catch {
+    return "";
+  }
 }
 
 function makeInviteLink(roomId) {
@@ -3280,8 +3349,9 @@ async function copyText(text) {
   helper.style.left = "-9999px";
   document.body.appendChild(helper);
   helper.select();
-  document.execCommand("copy");
+  const copied = document.execCommand("copy");
   helper.remove();
+  if (!copied) throw new Error("copy-failed");
 }
 
 function currentRoom() {

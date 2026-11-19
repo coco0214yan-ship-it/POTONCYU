@@ -19,6 +19,10 @@ node server.cjs
 
 仮データで確認する場合はブラウザで http://127.0.0.1:4280/?demo=1 を開きます。実際のログイン・通信は本番URLで利用します。ローカルでGoogleログインを使う場合は、Firebase Authenticationでそのホストの許可が必要です。
 
+## 招待
+
+トーク上部の「招待」を押すと、QRコードと招待リンクが重ねて表示されます。「リンクをコピー」でリンクを写せます。QRコードは同梱の `qrcode.js`（Kazuhiko Arase 作 qrcode-generator 2.0.4、MITライセンス）で端末内で作り、外部には送りません。
+
 ## 一首とリアクション
 
 - `chat-rules.js`: AIで作れない時に使う、用意してある一首です。入力のキーワードから組み合わせを選び、各行と選択肢の読み仮名で5・7・5・7・7を検証しています。入力した内容そのものはトークに送りません。
@@ -68,7 +72,7 @@ OpenAIを使う `functions/generate-poems.js`（`POTONCHU_GENERATION_CONFIG`）�
 ## 確認
 
 ```powershell
-node --test tests/notifications.test.cjs tests/notification-client.test.cjs tests/notification-worker.test.cjs tests/production-chat.test.cjs tests/chat-flow.test.cjs tests/chat-rules.test.cjs tests/poem-engine.test.cjs tests/reactions.test.cjs tests/ai-generation.test.cjs tests/firebase-ai-logic.test.cjs
+node --test tests/notifications.test.cjs tests/notification-client.test.cjs tests/notification-worker.test.cjs tests/production-chat.test.cjs tests/chat-flow.test.cjs tests/chat-rules.test.cjs tests/poem-engine.test.cjs tests/reactions.test.cjs tests/ai-generation.test.cjs tests/firebase-ai-logic.test.cjs tests/invite.test.cjs
 ```
 
 `tests/ui-smoke.cjs` はPlaywrightを使ったローカル画面確認です。Firebase設定を空にした検証専用のブラウザで動かし、本物のアカウントやルームには書き込みません。
