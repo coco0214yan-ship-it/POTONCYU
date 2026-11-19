@@ -940,6 +940,8 @@ function watchRoomMemberChanges(rooms) {
 }
 
 function render() {
+  const aiNotice = document.querySelector("#previewModeNotice");
+  if (aiNotice) aiNotice.textContent = window.POTONCHU_AI_LOGIC_CONFIG?.enabled ? "AI生成のお試し版。入力した思いだけをGoogleへ送ります。別端末との通信・定期通知は未接続です。" : "AI接続は設定待ちです。現在はサンプルの一首で試せます。別端末との通信・定期通知は未接続です。";
   const focusedChat = document.activeElement?.id === "chatInput" ? document.activeElement : null;
   if (focusedChat && ui.chatComposing) { ui.chatRenderPending = true; return; }
   const chatSelection = focusedChat ? [focusedChat.selectionStart, focusedChat.selectionEnd] : null;
@@ -1676,7 +1678,7 @@ function renderGacha() {
             <div class="gacha-title">
               <p class="eyebrow">isshu gacha</p>
               <h1>一首ガチャ</h1>
-              <p class="small-note">AI未接続：思いのキーワードに合わせたお試しの一首を用意しています。</p>
+              <p class="small-note">${window.POTONCHU_AI_LOGIC_CONFIG?.enabled ? "AIで思いに合う一首を作っています。" : "AI設定待ち：キーワードに合わせたサンプルです。"}</p>
             </div>
             <span class="topic-badge">${escapeHtml(composer.topic)}</span>
           </div>
@@ -1720,7 +1722,7 @@ function renderGacha() {
           <div class="gacha-title">
             <p class="eyebrow">isshu gacha</p>
             <h1>穴あき一首</h1>
-            <p class="small-note">AI未接続のお試し一首。真ん中の「5音」を4つから選んでね。</p>
+            <p class="small-note">${composer.draft.source === "firebase-ai-logic" ? "Firebase AI Logicで作った一首。" : "AI未接続のサンプル一首。"}真ん中の「5音」を4つから選んでね。</p>
           </div>
           <span class="topic-badge">${escapeHtml(composer.topic)}</span>
         </div>
@@ -1769,7 +1771,7 @@ function renderConfirm() {
           <p class="eyebrow">send</p>
           <h1>この一首で送る？</h1>
           <p class="confirm-copy">${escapeHtml(currentRoom()?.name || "")}へ、この一首だけ届けます。</p>
-          <p class="small-note">5・7・5・7・7のお試し一首です。AI生成はまだ接続していません。</p>
+          <p class="small-note">${composer.draft.source === "firebase-ai-logic" ? "AI生成した一首です。選んだことばと一緒に届けます。" : "5・7・5・7・7のサンプルです。AI生成はまだ接続していません。"}</p>
         </div>
         <div class="poem-stage">
           <div class="poem-paper">
@@ -2406,7 +2408,7 @@ async function spinGacha(topic, previousTemplateId = "") {
     if (ui.composer !== composer || ui.view !== "gacha") return;
     ui.view = "chat";
     render();
-    showToast("一首を用意できませんでした。もう一度まわしてみてください。");
+    showToast(window.POTONCHU_AI_LOGIC_CONFIG?.enabled ? "AIで一首を用意できませんでした。接続設定を確認するか、少し待ってもう一度回してください。" : "一首を用意できませんでした。もう一度まわしてみてください。");
   }
 }
 
@@ -2850,11 +2852,16 @@ function resizeImageToDataUrl(file, size) {
 
 const poemProvider = PotonchuPoems.createProvider(poemLibrary);
 const previewPoemGenerator = PotonchuChatRules.createGenerator();
+let firebaseAiLogicProvider = null;
 const aiPoemQueues = new Map();
 let aiCallable = null;
 let aiUnavailableUntil = 0;
 
 async function generatePoem(topic, previousTemplateId, roomId) {
+  if (window.POTONCHU_AI_LOGIC_CONFIG?.enabled) {
+    if (!firebaseAiLogicProvider) firebaseAiLogicProvider = PotonchuAILogic.createProvider(window.POTONCHU_AI_LOGIC_CONFIG);
+    return firebaseAiLogicProvider.generate(topic);
+  }
   if (PREVIEW_MODE) return previewPoemGenerator(topic);
   const config = window.POTONCHU_GENERATION_CONFIG || {};
   if (config.enabled && isFirebaseMode() && appState.user && roomId && Date.now() >= aiUnavailableUntil) {
