@@ -20,6 +20,16 @@ if (typeof window !== "undefined") {
   window.POTONCHU_NOTIFICATION_CONFIG = { region: "asia-northeast1" };
   // Enable after deploying generatePoems and registering its server-side secret.
   window.POTONCHU_GENERATION_CONFIG = { enabled: false, region: "asia-northeast1" };
+  // Firebase AI Logic（Gemini Developer API）で「生成する」から一首を作ります。
+  // appCheckSiteKey は reCAPTCHA Enterprise の公開サイトキーです。GeminiのAPIキーや秘密鍵は書かないでください。
+  window.POTONCHU_AI_LOGIC_CONFIG = {
+    enabled: true,
+    model: "gemini-3.8-flash",
+    thinkingLevel: "LOW",
+    sdkVersion: "12.15.0",
+    appCheckSiteKey: "6LcR1CcuAAAAAES7m8SNblwPQRpgItJcsivtwXHw",
+    timeoutMs: 30000,
+  };
 }
 
 if (typeof self !== "undefined") {

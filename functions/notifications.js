@@ -74,10 +74,11 @@ function createNotificationService({ db, messaging, Timestamp, FieldValue, appUr
       let failed = false;
       for (let offset = 0; offset < tokens.length; offset += 500) {
         const chunk = tokens.slice(offset, offset + 500);
-        // Data-only: the service worker displays exactly one notification.
+        // Data-only: the service worker's push listener displays exactly one notification.
+        // High urgency so a phone in power saving still wakes for a chat message.
         const response = await messaging.sendEachForMulticast({
           tokens: chunk, data: { ...data, recipientId: uid, notificationId: hash(eventKey) },
-          webpush: { headers: { TTL: "3600", Urgency: "normal" } },
+          webpush: { headers: { TTL: "3600", Urgency: "high" } },
         });
         for (let i = 0; i < chunk.length; i++) {
           const result = response.responses[i];

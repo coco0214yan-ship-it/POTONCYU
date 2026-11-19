@@ -5,13 +5,16 @@ const vm = require("node:vm");
 function harness(permission = "granted") {
   const storage = () => { const values = new Map(); return { getItem: (key) => values.get(key) || null, setItem: (key, value) => values.set(key, value), removeItem: (key) => values.delete(key) }; };
   const events = [], toasts = [];
-  const registration = { active: { postMessage: (message) => events.push(["worker", message.userId]) } };
+  const registration = {
+    active: { postMessage: (message) => events.push(["worker", message.userId]) },
+    getNotifications: ({ tag }) => ({ then: (done) => { done([{ close: () => events.push(["close", tag]) }]); return { catch() {} }; } }),
+  };
   const notification = { permission, requestPermission: async () => { events.push(["permission"]); return notification.permission; } };
   let listener;
   const context = vm.createContext({
     Date, console, URL, URLSearchParams, crypto: require("node:crypto"),
     localStorage: storage(), sessionStorage: storage(), Notification: notification,
-    window: { Notification: notification, isSecureContext: true, location: { hostname: "example.com", search: "", href: "https://example.com/POTONCYU/" }, POTONCHU_FIREBASE_MESSAGING_VAPID_KEY: "test-key" },
+    window: { setTimeout: (fn, delay) => { if (delay < 5000) fn(); return 0; }, clearTimeout() {}, Notification: notification, isSecureContext: true, location: { hostname: "example.com", search: "", href: "https://example.com/POTONCYU/" }, POTONCHU_FIREBASE_MESSAGING_VAPID_KEY: "test-key" },
     navigator: { serviceWorker: { register: async (url, options) => { events.push(["sw", url, options]); return registration; }, getRegistration: async () => registration } },
     document: { querySelector: () => ({}), visibilityState: "visible" },
     PotonchuPoems: require("../poem-engine"), PotonchuChatRules: require("../chat-rules"),
@@ -61,6 +64,7 @@ test("foreground messages reject the wrong recipient and duplicates, suppress ac
   app.run('ui.view="chat"; appState.activeRoomId="r"');
   app.emit({ recipientId: "me", type: "text", roomId: "r", notificationId: "two" });
   assert.equal(app.toasts.length, 1);
+  assert.deepEqual(app.events.filter((event) => event[0] === "close"), [["close", "two"], ["close", "two"]]);
   app.emit({ recipientId: "me", type: "reminder", roomId: "r", notificationId: "three" });
   assert.match(app.toasts[1], /12時間/);
 });
@@ -72,4 +76,17 @@ test("registration failure keeps a safe error code and does not report an enable
   assert.equal(app.run("backend.notificationEnabled"), false);
   assert.match(app.run("backend.notificationStatus"), /functions\/unavailable/);
   assert.ok(!app.run("backend.notificationStatus").includes("secret"));
+});
+
+test("the first registration waits for the worker to activate before asking for a token", async () => {
+  const app = harness();
+  let activate;
+  const worker = { state: "installing", postMessage() {}, addEventListener: (type, fn) => { activate = () => { worker.state = "activated"; fn(); }; } };
+  app.run("navigator").serviceWorker.register = async () => ({ installing: worker });
+  const pending = app.run("enableNotifications()");
+  await new Promise(setImmediate);
+  assert.equal(app.events.some((event) => event[0] === "token"), false);
+  activate();
+  await pending;
+  assert.equal(app.events.some((event) => event[0] === "token"), true);
 });

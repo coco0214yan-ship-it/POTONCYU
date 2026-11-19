@@ -10,7 +10,7 @@ const SESSION_USER_KEY = `${STORAGE_PREFIX}.sessionUser.v1`;
 const ACTIVE_ROOM_KEY = `${STORAGE_PREFIX}.activeRoomId`;
 const HISTORY_RESET_KEY = `${STORAGE_PREFIX}.historyReset.v5`;
 const FIREBASE_SDK_VERSION = "12.15.0";
-const FIREBASE_MESSAGING_SW_PATH = "./firebase-messaging-sw.js?v=20261117-fcm1";
+const FIREBASE_MESSAGING_SW_PATH = "./firebase-messaging-sw.js?v=20261119-push1";
 const NOTIFICATION_STORAGE_KEY = `${STORAGE_PREFIX}.notificationDevice.v1`;
 const BLANK = "__POTON_BLANK__";
 
@@ -1382,14 +1382,14 @@ function renderChat() {
           <button type="button" class="mini-button ${isPoem ? "is-selected" : ""}" data-action="compose-poem" aria-pressed="${isPoem}">一首をつくる</button>
           <button type="button" class="mini-button ${!isPoem ? "is-selected" : ""}" data-action="compose-text" aria-pressed="${!isPoem}" ${windowState.canTalk ? "" : "disabled"}>おしゃべり${windowState.canTalk ? "" : " 🔒"}</button>
         </div>
-        <label for="chatInput" class="chat-input-label">${isPoem ? "伝えたい思いやテーマ" : "おしゃべりのメッセージ"}</label>
+        <label for="chatInput" class="chat-input-label">${isPoem ? "相手に送りたい内容" : "おしゃべりのメッセージ"}</label>
         <div class="chat-input-row">
           <textarea id="chatInput" name="message" rows="2" enterkeyhint="send" maxlength="${isPoem ? 200 : 500}" placeholder="${isPoem ? "例：助けてくれた友達に、ありがとうを伝えたい" : "一首から広がった話の続きを…"}">${escapeHtml(draft)}</textarea>
-          <button type="submit" class="primary-button" id="chatSend" ${backend.chatSending.has(room.id) ? "disabled" : ""}>${backend.chatSending.has(room.id) ? "送信中" : isPoem ? "一首ガチャ" : "送信"}</button>
+          <button type="submit" class="primary-button" id="chatSend" ${backend.chatSending.has(room.id) ? "disabled" : ""}>${backend.chatSending.has(room.id) ? "送信中" : isPoem ? "生成する" : "送信"}</button>
         </div>
-        <p class="dock-note">${isPoem ? "入力した思いは送信されません。一首を選んでから届きます。" : "この文章をトークに送ります。一首の送信から12時間まで。"}</p>
+        <p class="dock-note">${isPoem ? (aiLogicEnabled() ? "入力した内容は相手には届きません。AI（Google Gemini）に送って一首にし、ことばを選んでから届きます。" : "入力した内容は相手には届きません。一首を選んでから届きます。") : "この文章をトークに送ります。一首の送信から12時間まで。"}</p>
         <span id="chatCount" class="chat-count">${countChars(draft)} / ${isPoem ? 200 : 500}</span>
-        <p class="keyboard-hint">Enterで${isPoem ? "ガチャを開始" : "送信"}・Shift＋Enterで改行。日本語変換の確定では送信しません。</p>
+        <p class="keyboard-hint">Enterで${isPoem ? "生成" : "送信"}・Shift＋Enterで改行。日本語変換の確定では送信しません。</p>
       </form>
       ${renderPreviewControls()}
     </section>
@@ -1724,7 +1724,7 @@ function renderGacha() {
             <div class="gacha-title">
               <p class="eyebrow">isshu gacha</p>
               <h1>一首ガチャ</h1>
-              <p class="small-note">思いのキーワードに合わせて、一首のことばを選んでいます。</p>
+              <p class="small-note">${composer.ai ? "AIが、送りたい内容から一首を作っています。少し待ってね。" : "キーワードに合わせて、一首のことばを選んでいます。"}</p>
             </div>
             <span class="topic-badge">${escapeHtml(composer.topic)}</span>
           </div>
@@ -1768,7 +1768,7 @@ function renderGacha() {
           <div class="gacha-title">
             <p class="eyebrow">isshu gacha</p>
             <h1>穴あき一首</h1>
-            <p class="small-note">真ん中の「5音」を4つから選んでね。</p>
+            <p class="small-note">${composer.draft.source === "firebase-ai-logic" ? "AIが作った一首です。" : composer.ai ? "AIで作れなかったため、用意してある一首です。" : ""}真ん中の「5音」を4つから選んでね。</p>
           </div>
           <span class="topic-badge">${escapeHtml(composer.topic)}</span>
         </div>
@@ -2124,9 +2124,9 @@ async function handleSubmit(event) {
   if (form.dataset.form === "chat-composer") {
     const room = currentRoom();
     const text = form.elements.namedItem("message").value.trim();
-    if (!room || !text) { showToast("思いやメッセージを入力してください。"); return; }
+    if (!room || !text) { showToast(ui.composeMode === "poem" ? "相手に送りたい内容を入力してください。" : "メッセージを入力してください。"); return; }
     if (ui.composeMode === "poem") {
-      if (countChars(text) > 200) { showToast("思いは200字以内で入力してください。"); return; }
+      if (countChars(text) > 200) { showToast("送りたい内容は200字以内で入力してください。"); return; }
       ui.topic = text;
       spinGacha(text);
     } else {
@@ -2439,7 +2439,7 @@ async function setActiveRoom(roomId) {
 async function spinGacha(topic, previousTemplateId = "") {
   topic = String(topic).trim();
   if (!topic || countChars(topic) > 200) {
-    showToast("思いは1〜200字で入れてください。");
+    showToast("送りたい内容は1〜200字で入れてください。");
     return;
   }
   ui.view = "gacha";
@@ -2449,6 +2449,7 @@ async function spinGacha(topic, previousTemplateId = "") {
     step: "loading",
     draft: null,
     selectedChoice: "",
+    ai: aiLogicEnabled(),
     loadingCopy: pickOne(gachaCaptions),
   };
   ui.composer = composer;
@@ -2463,6 +2464,7 @@ async function spinGacha(topic, previousTemplateId = "") {
     composer.draft = draft;
     composer.step = "gacha";
     render();
+    if (composer.ai && draft.source !== "firebase-ai-logic") showToast("AIで一首を作れなかったため、用意してある一首を表示しています。");
   } catch (error) {
     if (ui.composer !== composer || ui.view !== "gacha") return;
     ui.view = "chat";
@@ -2859,6 +2861,8 @@ async function enableNotifications(restore = false) {
     }
     const registration = await navigator.serviceWorker.register(FIREBASE_MESSAGING_SW_PATH, { scope: "./", updateViaCache: "none" });
     backend.serviceWorkerRegistration = registration;
+    // A push subscription needs an active worker; on the first visit it is still installing.
+    await waitForActiveWorker(registration);
     const token = await backend.firebase.messagingModule.getToken(backend.firebase.messaging, {
       vapidKey,
       serviceWorkerRegistration: registration,
@@ -2892,6 +2896,19 @@ async function enableNotifications(restore = false) {
     backend.notificationBusy = false;
     render();
   }
+}
+
+function waitForActiveWorker(registration) {
+  const worker = registration.installing || registration.waiting;
+  if (registration.active || !worker?.addEventListener) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(resolve, 10000);
+    worker.addEventListener("statechange", () => {
+      if (worker.state !== "activated" && worker.state !== "redundant") return;
+      window.clearTimeout(timer);
+      resolve();
+    });
+  });
 }
 
 function readNotificationDevice() {
@@ -2985,10 +3002,23 @@ function setupForegroundNotifications() {
     if (id && seen.has(id)) return;
     if (id) { seen.add(id); if (seen.size > 100) seen.delete(seen.values().next().value); }
     const roomId = payload.data?.roomId || "";
-    if (payload.data?.type !== "reminder" && ui.view === "chat" && roomId === appState.activeRoomId && document.visibilityState === "visible") return;
+    if (payload.data?.type !== "reminder" && ui.view === "chat" && roomId === appState.activeRoomId && document.visibilityState === "visible") {
+      // The worker always shows a system notification; the open chat already shows the message.
+      closeShownNotification(id);
+      return;
+    }
     const text = payload.data?.type === "reminder" ? "12時間たちました。新しい一首で、また話そう。" : payload.data?.type === "text" ? "新しいメッセージが届きました。" : "新しい一首が届きました。";
     showToast(text);
   });
+}
+
+function closeShownNotification(tag) {
+  const registration = backend.serviceWorkerRegistration;
+  if (!tag || !registration?.getNotifications) return;
+  // The worker may still be displaying it, so look twice.
+  [400, 2000].forEach((delay) => window.setTimeout(() => {
+    registration.getNotifications({ tag }).then((shown) => shown.forEach((notification) => notification.close())).catch(() => {});
+  }, delay));
 }
 
 function getMessagingVapidKey() {
@@ -3067,8 +3097,41 @@ const previewPoemGenerator = PotonchuChatRules.createGenerator();
 const aiPoemQueues = new Map();
 let aiCallable = null;
 let aiUnavailableUntil = 0;
+let aiLogicProvider = null;
+
+// Firebase AI Logic（Gemini）で一首を作るかどうか。ローカルの ?demo=1 では &ai=1 を付けた時だけ使う。
+function aiLogicEnabled() {
+  const config = window.POTONCHU_AI_LOGIC_CONFIG || {};
+  if (PREVIEW_MODE || !config.enabled || !window.PotonchuAILogic) return false;
+  if (LOCAL_DEMO_MODE) return new URLSearchParams(window.location.search).get("ai") === "1";
+  return hasFirebaseConfig();
+}
+
+function getAiLogicProvider() {
+  if (!aiLogicProvider) {
+    const local = ["127.0.0.1", "localhost"].includes(window.location.hostname);
+    let debugToken = "";
+    // 開発用PCで登録したApp Checkのデバッグトークン。公開先のドメインでは読まない。
+    if (local) { try { debugToken = localStorage.getItem("potonchu.appCheckDebugToken") || ""; } catch { debugToken = ""; } }
+    aiLogicProvider = PotonchuAILogic.createProvider({
+      ...window.POTONCHU_AI_LOGIC_CONFIG,
+      firebaseConfig: window.POTONCHU_FIREBASE_CONFIG || {},
+      appCheckDebugToken: debugToken,
+    });
+  }
+  return aiLogicProvider;
+}
 
 async function generatePoem(topic, previousTemplateId, roomId) {
+  if (aiLogicEnabled()) {
+    try {
+      return await getAiLogicProvider().generate(topic);
+    } catch (error) {
+      // 送れなくなることを避けるため、AIで作れない時は用意してある一首に切り替える。
+      console.warn("AI poem generation failed:", error?.code || error?.message || error);
+      return previewPoemGenerator(topic);
+    }
+  }
   const config = window.POTONCHU_GENERATION_CONFIG || {};
   if (PREVIEW_MODE || !config.enabled) return previewPoemGenerator(topic);
   if (config.enabled && isFirebaseMode() && appState.user && roomId && Date.now() >= aiUnavailableUntil) {

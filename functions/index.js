@@ -16,7 +16,9 @@ const service = () => createNotificationService({
   db: getFirestore(), messaging: getMessaging(), Timestamp, FieldValue, appUrl: appUrl.value(),
 });
 
-exports.generatePoems = require("./generate-poems").generatePoems;
+// 一首の生成はブラウザからFirebase AI Logic（ai-logic.js）で行うため、OpenAIを使う generatePoems は公開しない。
+// 公開する場合は OPENAI_API_KEY のシークレット登録が必要で、未登録のままではほかの関数もデプロイできない。
+// exports.generatePoems = require("./generate-poems").generatePoems;
 
 // Keep the existing name and region so deployment updates the old trigger.
 exports.sendPoemNotification = onDocumentCreated({

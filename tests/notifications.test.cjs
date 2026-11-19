@@ -76,6 +76,7 @@ test("message notification reaches current members, excludes sender, protects bo
   assert.equal(app.calls.length, 1);
   assert.deepEqual(app.calls[0].tokens, ["friend-token"]);
   assert.equal(app.calls[0].notification, undefined);
+  assert.equal(app.calls[0].webpush.headers.Urgency, "high");
   assert.equal(app.calls[0].data.recipientId, "friend");
   assert.equal(app.calls[0].data.url, "https://example.com/POTONCYU/?roomId=r");
   assert.ok(!JSON.stringify(app.calls).includes("秘密の名前"));

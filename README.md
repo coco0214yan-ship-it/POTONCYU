@@ -2,7 +2,7 @@ https://coco0214yan-ship-it.github.io/POTONCYU/
 
 # ぽとんちゅ
 
-一首から会話がはじまるチャット。相手やグループを選び、200字以内で思いを入力して一首ガチャを回します。真ん中の5音を4択から選び、完成した一首を送るか引き直すか決められます。
+一首から会話がはじまるチャット。相手やグループを選び、相手に送りたい内容を200字以内で入力して「生成する」を押すと、AIが一首を作ります。真ん中の5音を4択から選び、完成した一首を送るか引き直すか決められます。
 
 2026-11-15に、下部の「ホーム・トーク・おきにいり」、スマホでのコンパクト表示、Enter送信、複数のお気に入り、トーク内のおしゃべりを本番へ反映しました。プレビュー用の仮の相手・時計・通知見本は本番に表示しません。
 
@@ -21,7 +21,7 @@ node server.cjs
 
 ## 一首とリアクション
 
-- `chat-rules.js`: 思いのキーワードから一首の組み合わせを選びます。各行と選択肢の読み仮名で5・7・5・7・7を検証しています。AIは未接続で、分類できない思いには汎用の一首を使います。入力した思いそのものはトークに送りません。
+- `chat-rules.js`: AIで作れない時に使う、用意してある一首です。入力のキーワードから組み合わせを選び、各行と選択肢の読み仮名で5・7・5・7・7を検証しています。入力した内容そのものはトークに送りません。
 - 自分がそのトークで最後に一首を送ってから12時間、おしゃべりを送れます。送信直前にも期限を確認します。サーバーのFirestoreルールで12時間を強制する設定は今回変更していません。
 - おしゃべりは `rooms/{roomId}/messages` に `kind: "text"` として保存します。過去の一首も引き続き表示します。
 - お気に入りはユーザー情報の `favoritePoems` に複数保存します。過去の `favoritePoem` も読み込み、更新はトランザクションで行います。
@@ -29,28 +29,28 @@ node server.cjs
 - リアクションは選択直後に表示。Firestoreでは選んだ種類だけを更新し、他の人の反応を保ちます。保存失敗時は自分の変更を戻し、画面に表示します。
 - リアクションの音は端末内で合成します。チャット上部の「音」で切り替え、端末ごとに設定を保存します。
 
-FCM通知は、新しい一首・文章・返信を受け取った時と、自分の一首から12時間後に送信します。プロフィールで端末ごとに開始・停止できます。本番利用にはFunctionsのデプロイとFirebase設定の確認が必要です。[プッシュ通知の設定・デプロイ・検証手順](docs/push-notifications.md)を参照してください。
+FCM通知は、新しい一首・文章・返信を受け取った時と、自分の一首から12時間後に送信します。プロフィールで端末ごとに開始・停止できます。通知用のFunctionsは2026-11-19にデプロイしました。`functions/` を変えた時は再デプロイが必要です。[プッシュ通知の設定・デプロイ・検証手順](docs/push-notifications.md)を参照してください。
 
-## AI生成の有効化
+## AI生成（Firebase AI Logic）
 
-接続コードは用意済みですが、`firebase-config.js` の `POTONCHU_GENERATION_CONFIG.enabled` は初期値 `false` です。現在、OpenAIへの通信や課金は発生しません。200字の思いの入力と読み仮名による音数検証に生成APIを対応させてから、下記の接続設定を行います。今回AIや有料サービスを有効にはしていません。
+トークの入力欄に相手に送りたい内容（200字以内）を書いて「生成する」を押すと、Firebase AI Logic（Gemini Developer API）で一首を作ります。ガチャのあと真ん中の5音を4択から選び、送るか引き直すかを決める流れは従来どおりです。
 
-1. OpenAI APIを利用できるアカウントとAPIキー、FirebaseでFunctionsを利用できる契約を用意します。
-2. このフォルダのPowerShellで `npm --prefix functions install` を実行します。
-3. Firebase CLIへログイン後、`firebase functions:secrets:set OPENAI_API_KEY --project potonchu` を実行し、表示される入力欄へAPIキーを登録します。キーをHTML、JavaScript、GitHub、チャットに貼らないでください。
-4. `firebase deploy --only functions:generatePoems --project potonchu` で生成用関数だけを公開します。既存の通知関数はこの操作の対象外です。
-5. `firebase-config.js` の `enabled` を `true` にしてフロントエンドを公開します。
+- `ai-logic.js`: 生成と検証。1回の問い合わせで3首の候補を作り、読み仮名で5・7・5・7・7と4択の5音を確かめて、合ったものだけを使います。残りの候補は「引き直し」で待たずに出ます。1首も合わなければ1回だけ作り直します。
+- AIに送るのは入力した内容だけです。名前、相手、ルーム、過去の会話は送りません。入力した内容は相手には届きません。
+- AIで作れない時（通信の失敗、30秒以内に応答がない、音数が合わない）は、`chat-rules.js` の用意してある一首に切り替え、画面にその旨を表示します。
+- 設定は `firebase-config.js` の `POTONCHU_AI_LOGIC_CONFIG`。`enabled` を `false` にするとAIを使わず、用意してある一首だけになります。モデルは `gemini-3.8-flash`（考える量は `LOW`）。より軽い `gemini-3.5-flash-lite` は速いものの音数が合わず、採用していません。
+- Firebase側は App Check（reCAPTCHA Enterprise）を必須にしています。`appCheckSiteKey` は公開してよいサイトキーで、使えるドメインは `coco0214yan-ship-it.github.io` だけです。公開先のドメインを変える時は、Google Cloud の reCAPTCHA のキーにドメインを追加してください。GeminiのAPIキーや秘密鍵はこのリポジトリに書きません。
+- PC内（`http://127.0.0.1:4280/?demo=1`）ではAIを使いません。試す時は `?demo=1&ai=1` で開き、Firebaseコンソールの App Check で発行したデバッグトークンをブラウザのコンソールから `localStorage.setItem("potonchu.appCheckDebugToken", "トークン")` で入れます。トークンはファイルやチャットに書かないでください。
+- 利用料金は Gemini Developer API の使用量に応じます。Firebaseコンソールの AI Logic で使用量を確認できます。
 
-`functions/generate-poems.js` はルームへの参加を確認し、お題と直前の一首だけをAIへ渡します。1回で3首とそれぞれの4択を生成し、次の引き直しで使います。生成失敗や形式不正時はローカルの一首を表示します。
+OpenAIを使う `functions/generate-poems.js`（`POTONCHU_GENERATION_CONFIG`）は使っていません。`functions/index.js` でも公開を止めています。
 
-標準モデルは `gpt-4.1-mini`。Functionsの `POEM_MODEL` 設定で変更できます。利用回数は1人につき毎分5回、1日30回、アプリ全体で1日500回まで。失敗したリクエストも回数に含みます。Firestoreの `_poemGenerationUsage` はクライアントから書き換えできないルールにしてください。APIキーと利用料金の設定は別途必要です。
-
-公式仕様: [OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=responses)、[Firebase callable functions](https://firebase.google.com/docs/functions/callable)。
+公式資料: [Firebase AI Logic](https://firebase.google.com/docs/ai-logic/get-started?platform=web)、[App Check](https://firebase.google.com/docs/ai-logic/app-check)、[対応モデル](https://firebase.google.com/docs/ai-logic/models)。
 
 ## 確認
 
 ```powershell
-node --test tests/notifications.test.cjs tests/notification-client.test.cjs tests/notification-worker.test.cjs tests/production-chat.test.cjs tests/chat-flow.test.cjs tests/chat-rules.test.cjs tests/poem-engine.test.cjs tests/reactions.test.cjs tests/ai-generation.test.cjs
+node --test tests/notifications.test.cjs tests/notification-client.test.cjs tests/notification-worker.test.cjs tests/production-chat.test.cjs tests/chat-flow.test.cjs tests/chat-rules.test.cjs tests/poem-engine.test.cjs tests/reactions.test.cjs tests/ai-generation.test.cjs tests/firebase-ai-logic.test.cjs
 ```
 
 `tests/ui-smoke.cjs` はPlaywrightを使ったローカル画面確認です。Firebase設定を空にした検証専用のブラウザで動かし、本物のアカウントやルームには書き込みません。
