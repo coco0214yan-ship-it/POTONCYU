@@ -62,7 +62,7 @@ function harness() {
       send: async (message) => { singles.push(message); return single(message); },
     },
   });
-  records.set("rooms/r", { memberIds: ["sender", "friend", "friend"] });
+  records.set("rooms/r", { memberIds: ["sender", "friend", "friend"], type: "pair", roomName: "帰り道の会", members: [{ id: "sender", name: "名簿の名前" }] });
   const token = (uid, value) => records.set(`users/${uid}/notificationTokens/${hash(value)}`, { token: value, userId: uid, updatedAt: new Timestamp(clock) });
   const event = (id = "p1", data = {}) => {
     const message = { senderId: "sender", poemLines: ["一", "二", "三", "四", "五"], createdAt: new Timestamp(clock), ...data };
@@ -72,10 +72,10 @@ function harness() {
   return { records, service, calls, singles, waits, token, event, advance: (time) => { clock += time; }, respond: (fn) => { respond = fn; }, single: (fn) => { single = fn; } };
 }
 
-test("message notification reaches current members, excludes sender, protects body and trusted URL, and deduplicates retries", async () => {
+test("a poem notification names the sender but never shows the poem; it reaches current members only, uses the trusted URL, and deduplicates retries", async () => {
   const app = harness();
   app.token("sender", "own"); app.token("friend", "friend-token"); app.token("outsider", "outside");
-  const event = app.event("p1", { notificationUrl: "https://attacker.example", senderName: "秘密の名前" });
+  const event = app.event("p1", { notificationUrl: "https://attacker.example", senderName: "はな", poemLines: ["秘密の一行目", "二", "えらんだ語", "四", "五"], selectedWord: "えらんだ語" });
   await app.service.onMessage(event);
   await app.service.onMessage(event);
   assert.equal(app.calls.length, 1);
@@ -84,18 +84,23 @@ test("message notification reaches current members, excludes sender, protects bo
   assert.equal(app.calls[0].webpush.headers.Urgency, "high");
   assert.equal(app.calls[0].data.recipientId, "friend");
   assert.equal(app.calls[0].data.url, "https://example.com/POTONCYU/?roomId=r");
-  assert.ok(!JSON.stringify(app.calls).includes("秘密の名前"));
+  assert.equal(app.calls[0].data.title, "はなさんから一首が届きました");
+  assert.equal(app.calls[0].data.body, "ぽとんちゅを開いて読んでね。");
+  assert.ok(!/秘密の一行目|えらんだ語/.test(JSON.stringify(app.calls)));
   assert.equal([...app.records.keys()].filter((key) => key.startsWith("_poemReminders/")).length, 1);
 });
 
-test("text and legacy replies use message wording; nonmembers and unknown documents cannot trigger pushes", async () => {
+test("chat messages and replies show the sender's name and the message like an ordinary chat; nonmembers and unknown documents cannot trigger pushes", async () => {
   const app = harness(); app.token("friend", "token");
-  await app.service.onMessage(app.event("t1", { kind: "text", text: "秘密の本文" }));
+  await app.service.onMessage(app.event("t1", { kind: "text", text: "  今日は\nありがとう  ", senderName: "はな" }));
   assert.equal(app.calls[0].data.type, "text");
-  assert.ok(!JSON.stringify(app.calls).includes("秘密の本文"));
+  assert.equal(app.calls[0].data.title, "はな");
+  assert.equal(app.calls[0].data.body, "今日は ありがとう");
   const reply = app.event("p1", { kind: "text", text: "返事" }); reply.params.replyId = "reply1";
   await app.service.onReply(reply);
   assert.equal(app.calls.length, 2);
+  assert.equal(app.calls[1].data.title, "名簿の名前");
+  assert.equal(app.calls[1].data.body, "返事");
   await app.service.onMessage(app.event("bad", { senderId: "outsider" }));
   await app.service.onMessage(app.event("unknown", { poemLines: [] }));
   assert.equal(app.calls.length, 2);
@@ -221,4 +226,15 @@ test("a test to an expired device removes its registration; other send failures 
   app.single(async () => { throw Object.assign(new Error("down"), { code: "messaging/internal-error" }); });
   await assert.rejects(app.service.sendTest("me", "good-device"), { code: "messaging/internal-error" });
   assert.equal(app.records.has(`users/me/notificationTokens/${hash("good-device")}`), true);
+});
+
+test("group notifications say which talk; long names and messages are shortened; a missing name still reads naturally", async () => {
+  const app = harness(); app.token("friend", "token");
+  app.records.set("rooms/r", { memberIds: ["sender", "friend"], type: "group", roomName: "ゼミの帰り道のみんな", members: [] });
+  await app.service.onMessage(app.event("t1", { kind: "text", text: "あ".repeat(150), senderName: "な".repeat(30) }));
+  assert.equal(app.calls[0].data.title, `${"な".repeat(20)}…（ゼミの帰り道のみんな）`);
+  assert.equal(app.calls[0].data.body, `${"あ".repeat(100)}…`);
+  await app.service.onMessage(app.event("p2", { senderName: "" }));
+  assert.equal(app.calls[1].data.title, "ともだちさんから一首が届きました");
+  assert.equal(app.calls[1].data.body, "「ゼミの帰り道のみんな」に届いています。ぽとんちゅを開いて読んでね。");
 });

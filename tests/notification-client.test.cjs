@@ -69,6 +69,10 @@ test("foreground messages reject the wrong recipient and duplicates, suppress ac
   assert.match(app.toasts[1], /12時間/);
   app.emit({ recipientId: "me", type: "test", notificationId: "four" });
   assert.match(app.toasts[2], /テスト通知が届きました/);
+  app.emit({ recipientId: "me", type: "text", roomId: "other-room", notificationId: "five", title: "はな", body: "今日はありがとう" });
+  assert.equal(app.toasts[3], "はな：今日はありがとう");
+  app.emit({ recipientId: "me", type: "poem", roomId: "other-room", notificationId: "six", title: "はなさんから一首が届きました", body: "ぽとんちゅを開いて読んでね。" });
+  assert.equal(app.toasts[4], "はなさんから一首が届きました");
 });
 
 test("registration failure keeps a safe error code and does not report an enabled device", async () => {

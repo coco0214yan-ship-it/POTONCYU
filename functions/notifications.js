@@ -8,6 +8,11 @@ const TEST_COOLDOWN_MS = 30 * 1000;
 const INVALID_TOKEN_CODES = ["messaging/registration-token-not-registered", "messaging/invalid-registration-token"];
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 const millis = (value) => value?.toMillis?.() || 0;
+// 通知に出す名前・本文。改行などをまとめ、長い時は「…」で切る。
+const clip = (value, max) => {
+  const chars = Array.from(typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "");
+  return chars.length > max ? `${chars.slice(0, max).join("")}…` : chars.join("");
+};
 const kindOf = (data) => data?.kind === "text" ? "text" : Array.isArray(data?.poemLines) && data.poemLines.length === 5 ? "poem" : null;
 
 function createNotificationService({ db, messaging, Timestamp, FieldValue, appUrl, now = Date.now, wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }) {
@@ -153,10 +158,20 @@ function createNotificationService({ db, messaging, Timestamp, FieldValue, appUr
       if (!poemAt) throw new Error("A server timestamp is required for poem reminders");
       await queueReminder(roomId, message.senderId, messageId, poemAt);
     }
-    const data = {
-      type: kind === "poem" ? "poem" : "text", roomId, messageId,
-      title: kind === "poem" ? "新しい一首が届きました" : "新しいメッセージが届きました",
-      body: "ぽとんちゅを開いて確認してね。", url: roomUrl(roomId),
+    // ふつうのチャットのように、送った人の名前を出す。おしゃべりと返信は内容も出す。
+    // 一首は名前だけにして、ぽとんちゅを開いて読んでもらう。
+    const member = (Array.isArray(room.members) ? room.members : []).find((item) => item?.id === message.senderId);
+    const name = clip(message.senderName, 20) || clip(member?.name, 20) || "ともだち";
+    const group = room.type === "group" ? clip(room.roomName, 20) : "";
+    const data = kind === "poem" ? {
+      type: "poem", roomId, messageId,
+      title: `${name}さんから一首が届きました`,
+      body: group ? `「${group}」に届いています。ぽとんちゅを開いて読んでね。` : "ぽとんちゅを開いて読んでね。",
+      url: roomUrl(roomId),
+    } : {
+      type: "text", roomId, messageId,
+      title: group ? `${name}（${group}）` : name,
+      body: clip(message.text, 100), url: roomUrl(roomId),
     };
     await Promise.all(members.filter((uid) => uid !== message.senderId).map((uid) =>
       sendToUser(uid, `message:${roomId}:${messageId}:${replyId || ""}`, data)));

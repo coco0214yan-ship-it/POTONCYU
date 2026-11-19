@@ -1227,7 +1227,7 @@ function renderProfileCard() {
         </div>
         <button type="button" class="copy-button" data-action="${backend.notificationEnabled ? "disable-notifications" : "enable-notifications"}" ${backend.notificationBusy || backend.notificationTesting ? "disabled" : ""}>${backend.notificationBusy ? "設定中…" : backend.notificationEnabled ? "この端末の通知を停止" : "通知を受け取る"}</button>
         ${backend.notificationEnabled ? `<button type="button" class="copy-button" data-action="test-notification" ${backend.notificationBusy || backend.notificationTesting ? "disabled" : ""}>${backend.notificationTesting ? "送信中…" : "テスト通知を送る"}</button>` : ""}
-        <p class="small-note">新しい一首・メッセージと、自分が一首を送って12時間後にお知らせします。通知には会話の本文を表示しません。</p>
+        <p class="small-note">新しい一首・メッセージと、自分が一首を送って12時間後にお知らせします。通知には送った人の名前が出ます。おしゃべりと返信は内容も出ます（一首は名前だけ）。</p>
         <p class="small-note">iPhone・iPadではSafariからホーム画面に追加し、追加したアプリで通知を許可してください。</p>
       </div>
     </div>
@@ -3047,7 +3047,13 @@ function setupForegroundNotifications() {
       closeShownNotification(id);
       return;
     }
-    const text = payload.data?.type === "test" ? "テスト通知が届きました。" : payload.data?.type === "reminder" ? "12時間たちました。新しい一首で、また話そう。" : payload.data?.type === "text" ? "新しいメッセージが届きました。" : "新しい一首が届きました。";
+    const type = payload.data?.type;
+    const title = typeof payload.data?.title === "string" ? payload.data.title : "";
+    const body = typeof payload.data?.body === "string" ? payload.data.body : "";
+    const text = type === "test" ? "テスト通知が届きました。"
+      : type === "reminder" ? "12時間たちました。新しい一首で、また話そう。"
+      : type === "text" ? (title && body ? `${title}：${Array.from(body).slice(0, 40).join("")}` : "新しいメッセージが届きました。")
+      : title || "新しい一首が届きました。";
     showToast(text);
   });
 }
