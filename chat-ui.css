@@ -126,3 +126,7 @@ body:has(.chat-shell) .preview-notice { flex: 0 0 auto; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+/* スマホ通知：停止ボタンとテストボタンの間をあける */
+.notification-box .copy-button + .copy-button { margin-top: 10px; }
+.notification-box .copy-button { display: block; }

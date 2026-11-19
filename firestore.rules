@@ -1,0 +1,62 @@
+rules_version = '2';
+
+// ぽとんちゅのFirestoreルール。
+// ログインした人が、自分のプロフィールと、自分が入っているルームの中身だけを読み書きできます。
+// 通知用のデータ（users/{uid}/notificationTokens、_notificationDevices、_notificationDeliveries、
+// _poemReminders）はFunctionsだけが使うので、ここには書きません（書かれていない場所は読み書きできません）。
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isMember(roomId) {
+      return signedIn()
+        && request.auth.uid in get(/databases/$(database)/documents/rooms/$(roomId)).data.memberIds;
+    }
+
+    function changedOnly(fields) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(fields);
+    }
+
+    // 名前・アイコン・お気に入りは本人だけ。
+    match /users/{userId} {
+      allow get, create, update: if signedIn() && request.auth.uid == userId;
+    }
+
+    match /rooms/{roomId} {
+      // 招待リンク（ルームID）を知っているログイン済みの人は、そのルーム1件だけ読めます。
+      allow get: if signedIn();
+      // 一覧は自分が入っているルームだけ。
+      allow list: if signedIn() && request.auth.uid in resource.data.memberIds;
+      // 新しいルームは、作った本人だけがメンバーの状態で始めます。
+      allow create: if signedIn()
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.memberIds == [request.auth.uid];
+      allow update: if signedIn() && (
+        // メンバーは名簿（名前・写真）だけ更新できます。メンバーの出入りは変えられません。
+        (request.auth.uid in resource.data.memberIds
+          && request.resource.data.memberIds == resource.data.memberIds
+          && changedOnly(['members', 'updatedAt']))
+        // 招待リンクから参加する人は、自分だけをメンバーに追加できます。
+        || (!(request.auth.uid in resource.data.memberIds)
+          && request.resource.data.memberIds == resource.data.memberIds.concat([request.auth.uid])
+          && changedOnly(['memberIds', 'members']))
+      );
+
+      // 一首とおしゃべり。読めるのも送れるのもメンバーだけで、送り主は本人に限ります。
+      match /messages/{messageId} {
+        allow read: if isMember(roomId);
+        allow create: if isMember(roomId) && request.resource.data.senderId == request.auth.uid;
+        // 送ったあとに変えられるのはリアクションだけ。
+        allow update: if isMember(roomId) && changedOnly(['reactions']);
+
+        // 一首への返信。
+        match /replies/{replyId} {
+          allow read: if isMember(roomId);
+          allow create: if isMember(roomId) && request.resource.data.senderId == request.auth.uid;
+        }
+      }
+    }
+  }
+}

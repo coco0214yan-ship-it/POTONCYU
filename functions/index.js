@@ -29,18 +29,29 @@ exports.sendTalkNotification = onDocumentCreated({
   document: "rooms/{roomId}/messages/{messageId}/replies/{replyId}", retry: true,
 }, (event) => service().onReply(event));
 
-async function deviceRequest(request, enabled) {
+function deviceToken(request) {
   if (!request.auth) throw new HttpsError("unauthenticated", "先にログインしてください。");
   const token = request.data?.token;
   if (typeof token !== "string" || token.length < 20 || token.length > 4096 || /\s/.test(token)) {
     throw new HttpsError("invalid-argument", "通知の登録情報が正しくありません。");
   }
+  return token;
+}
+
+async function deviceRequest(request, enabled) {
+  const token = deviceToken(request);
   await service().setDevice(request.auth.uid, token, enabled);
   return { enabled };
 }
 
 exports.registerNotificationDevice = onCall({ region: "asia-northeast1" }, (request) => deviceRequest(request, true));
 exports.unregisterNotificationDevice = onCall({ region: "asia-northeast1" }, (request) => deviceRequest(request, false));
+
+// プロフィールの「テスト通知を送る」。押した本人のその端末だけに、5秒後に送る。
+exports.sendTestNotification = onCall({ region: "asia-northeast1", timeoutSeconds: 30 }, async (request) => {
+  const token = deviceToken(request);
+  return service().sendTest(request.auth.uid, token);
+});
 
 exports.sendPoemReminders = onSchedule({
   schedule: "every 5 minutes", timeZone: "Asia/Tokyo", region: "asia-northeast1",

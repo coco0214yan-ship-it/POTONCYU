@@ -3,11 +3,14 @@ const { createHash } = require("node:crypto");
 const CONVERSATION_MS = 12 * 60 * 60 * 1000;
 const LEASE_MS = 5 * 60 * 1000;
 const STALE_MS = 90 * 24 * 60 * 60 * 1000;
+const TEST_DELAY_MS = 5 * 1000;
+const TEST_COOLDOWN_MS = 30 * 1000;
+const INVALID_TOKEN_CODES = ["messaging/registration-token-not-registered", "messaging/invalid-registration-token"];
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 const millis = (value) => value?.toMillis?.() || 0;
 const kindOf = (data) => data?.kind === "text" ? "text" : Array.isArray(data?.poemLines) && data.poemLines.length === 5 ? "poem" : null;
 
-function createNotificationService({ db, messaging, Timestamp, FieldValue, appUrl, now = Date.now }) {
+function createNotificationService({ db, messaging, Timestamp, FieldValue, appUrl, now = Date.now, wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }) {
   const base = new URL(appUrl);
   if (base.protocol !== "https:" || base.username || base.password) throw new Error("NOTIFICATION_APP_URL must be HTTPS");
   base.search = "";
@@ -82,7 +85,7 @@ function createNotificationService({ db, messaging, Timestamp, FieldValue, appUr
         });
         for (let i = 0; i < chunk.length; i++) {
           const result = response.responses[i];
-          const invalid = ["messaging/registration-token-not-registered", "messaging/invalid-registration-token"].includes(result?.error?.code);
+          const invalid = INVALID_TOKEN_CODES.includes(result?.error?.code);
           if (result?.success || invalid) {
             lease.add(hash(chunk[i]));
             if (invalid) await Promise.all(entries.get(chunk[i]).map((doc) => removeInvalidToken(doc, chunk[i])));
@@ -95,6 +98,33 @@ function createNotificationService({ db, messaging, Timestamp, FieldValue, appUr
     } catch (error) {
       await deliveryRef.set({ leaseUntil: Timestamp.fromMillis(0) }, { merge: true });
       throw error;
+    }
+  }
+
+  // 「テスト通知を送る」。押した本人の、その端末だけに送る。
+  // 少し待ってから送るので、アプリを閉じた状態でも届くかを確かめられる。
+  async function sendTest(uid, token) {
+    const saved = await tokenRef(uid, hash(token)).get();
+    const device = saved.data();
+    if (!device || device.token !== token || (device.userId && device.userId !== uid)) return { status: "not-registered" };
+    const remaining = millis(device.testedAt) + TEST_COOLDOWN_MS - now();
+    if (remaining > 0) return { status: "cooldown", retryAfterSeconds: Math.ceil(remaining / 1000) };
+    await saved.ref.set({ testedAt: Timestamp.fromMillis(now()) }, { merge: true });
+    await wait(TEST_DELAY_MS);
+    try {
+      await messaging.send({
+        token,
+        data: {
+          type: "test", title: "通知のテスト", body: "この端末に通知が届きました。", url: base.href,
+          recipientId: uid, notificationId: hash(`test:${uid}:${now()}`),
+        },
+        webpush: { headers: { TTL: "300", Urgency: "high" } },
+      });
+      return { status: "sent" };
+    } catch (error) {
+      if (!INVALID_TOKEN_CODES.includes(error?.code)) throw error;
+      await removeInvalidToken(saved, token);
+      return { status: "expired" };
     }
   }
 
@@ -162,7 +192,7 @@ function createNotificationService({ db, messaging, Timestamp, FieldValue, appUr
     return { processed: due.size };
   }
 
-  return { setDevice, onMessage: (event) => deliverMessage(event, false), onReply: (event) => deliverMessage(event, true), sendDueReminders };
+  return { setDevice, sendTest, onMessage: (event) => deliverMessage(event, false), onReply: (event) => deliverMessage(event, true), sendDueReminders };
 }
 
-module.exports = { createNotificationService, CONVERSATION_MS };
+module.exports = { createNotificationService, CONVERSATION_MS, TEST_DELAY_MS, TEST_COOLDOWN_MS };

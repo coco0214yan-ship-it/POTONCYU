@@ -9,6 +9,7 @@
 - OS通知は、アプリを開いている時も閉じている時も表示します（iPhoneは通知を出さない受信が続くと登録が失効するため）。開いている時は画面内のお知らせも出します。同じトークを閲覧中に届いた分は、OS通知をすぐ閉じ、画面内のお知らせも省略します。
 - ログアウトした端末と、別のアカウントに切り替えた端末には、前のアカウント宛ての通知を表示しません。
 - ロック画面に会話本文や送信者名は表示しません。通知をタップすると対象のルームを開きます。
+- プロフィールの「テスト通知を送る」で、その端末だけにテスト通知を送れます。押してから5秒後に送るので、アプリを閉じた状態で届くかも確かめられます。続けて押せるのは30秒に1回です。
 - プロフィールの「通知を受け取る」「この端末の通知を停止」で切り替えます。ログアウトでも解除します。ほかの端末の設定は維持します。
 
 ## 設定値
@@ -29,7 +30,7 @@
 2. Cloud Messaging API（HTTP v1）とFCM Registration APIが有効なこと。
 3. Cloud FunctionsとCloud Schedulerを利用できる課金設定（Blaze）になっていること。FCMの送信以外にFunctions・Firestore・Schedulerの利用料金が発生し得ます。
 4. Functionsの実行サービスアカウントにFirestoreの読み書きとFCM送信権限があること。組織ポリシーで既定権限を削っている場合は特に確認してください。
-5. Firestoreの既存ルールで、以下のサーバー専用データへのクライアントからの読み書きを許可していないこと。登録・解除は認証付きCallable Functionsで行うため、ブラウザにこれらのアクセス権は必要ありません。
+5. Firestoreのルール（`firestore.rules`）で、以下のサーバー専用データへのクライアントからの読み書きを許可していないこと。登録・解除は認証付きCallable Functionsで行うため、ブラウザにこれらのアクセス権は必要ありません。
 
 | パス | 内容・アクセス方針 |
 | --- | --- |
@@ -38,23 +39,23 @@
 | `_notificationDeliveries/{deliveryHash}` | 再送を抑える送信記録。サーバーのみ |
 | `_poemReminders/{roomUserHash}` | 次の一首の通知予約。サーバーのみ |
 
-このリポジトリには現在の本番Firestoreルールが含まれていません。既存のチャット用ルール全体を置き換えるファイルは追加していません。包括的な `/{document=**}` の読み書き許可がある場合、上記のパスを許可対象から外す必要があります。Firestoreでは、別の場所に拒否ルールを追加しても既存の許可を上書きできません。
+2026-11-19に、本番のルールを `firestore.rules` の内容へ変更しました。ルールに書いていない場所は読み書きできないため、上の表のデータはアプリから見えません。包括的な `/{document=**}` の許可は足さないでください。Firestoreでは、別の場所に拒否ルールを追加しても既存の許可を上書きできません。
 
 ## デプロイ
 
-`C:\Users\Owner\Documents\coco` のPowerShellで実行します。2026-11-19に下記の5関数を初めてデプロイしました（それまでは Cloud Functions API が無効で、端末の登録も送信も動いていませんでした）。`functions/` を変えた時に同じ手順で再デプロイします。
+`C:\Users\Owner\Documents\coco` のPowerShellで実行します。2026-11-19に下記の6関数を初めてデプロイしました（それまでは Cloud Functions API が無効で、端末の登録も送信も動いていませんでした）。`functions/` を変えた時に同じ手順で再デプロイします。
 
 ```powershell
 npm --prefix functions install
 npx firebase-tools login
-npx firebase-tools deploy --project potonchu --only "functions:registerNotificationDevice,functions:unregisterNotificationDevice,functions:sendPoemNotification,functions:sendTalkNotification,functions:sendPoemReminders"
+npx firebase-tools deploy --project potonchu --only "functions:registerNotificationDevice,functions:unregisterNotificationDevice,functions:sendTestNotification,functions:sendPoemNotification,functions:sendTalkNotification,functions:sendPoemReminders"
 ```
 
 このPCの既存Firebase CLIを使う場合は、`npx firebase-tools` の代わりに `node .tools/node_modules/firebase-tools/lib/bin/firebase.js` を使えます。
 
 デプロイ時に `NOTIFICATION_APP_URL` を聞かれたら、そのままEnterで初期値（現在の公開URL）を使います。`--non-interactive` を付ける場合と公開URLを変える場合は、Functionsの環境設定 `functions/.env.potonchu` に `NOTIFICATION_APP_URL=https://実際の公開先/` を設定してからデプロイします。環境ファイルはGit管理対象外です。既存の環境ファイルにほかの値がある場合は追記してください。SDK12.15.0と互換性のある`getToken`方式を維持しています。
 
-`sendPoemNotification` と `sendTalkNotification` は既定地域（us-central1、Firestoreが米国のマルチリージョン nam5 のため）、ほかの3関数は asia-northeast1 です。`generatePoems`（OpenAI）は `functions/index.js` で公開を止めています。シークレット未登録のまま公開対象に戻すと、ほかの関数もデプロイできません。
+`sendPoemNotification` と `sendTalkNotification` は既定地域（us-central1、Firestoreが米国のマルチリージョン nam5 のため）、ほかの4関数は asia-northeast1 です。`generatePoems`（OpenAI）は `functions/index.js` で公開を止めています。シークレット未登録のまま公開対象に戻すと、ほかの関数もデプロイできません。
 
 Firebaseコンソールで `sendPoemReminders` と、そのSchedulerジョブが作成されたことを確認します。スケジュールから使うクエリは `dueAt <= 現在時刻` の単一フィールドなので複合インデックスは不要です。
 
@@ -65,7 +66,7 @@ Firebaseコンソールで `sendPoemReminders` と、そのSchedulerジョブが
 ## 実機での検証
 
 1. 公開URLをChrome・Edge・対応Safariで開き、Googleログインします。`?demo=1` はFCMを利用しません。
-2. ホームのプロフィールで「通知を受け取る」を押し、ブラウザの通知を許可します。許可を自動で求める処理はありません。
+2. ホームのプロフィールで「通知を受け取る」を押し、ブラウザの通知を許可します。許可を自動で求める処理はありません。続けて「テスト通知を送る」を押し、5秒後に通知が出ることを確認します。押してすぐアプリを閉じると、閉じた状態での受信も確かめられます。
 3. 別アカウント・別端末から同じルームに一首と文章を送ります。受信側をバックグラウンドにしてOS通知を確認し、送り主の端末には受信通知が出ないことを確認します。
 4. 通知をタップして、`/POTONCYU/` の対象ルームが開くことを確認します。
 5. 自分で一首を送信し、12時間後〜次回の5分周期で「次の一首」の通知を確認します。早く試す場合は本番の時間設定を変えず、Firebaseコンソールから検証用の `_poemReminders` 1件の `dueAt` を過去にして、次のScheduler実行を待ちます。送信記録の再利用を避けるため新しい一首で試してください。
@@ -85,8 +86,7 @@ node server.cjs
 
 ## 制限と残作業
 
-- 端末での到着確認（特にiPhoneのホーム画面版）は別途必要です。FCMの実送信成功はローカルテストだけでは確認できません。
-- 現在の本番Firestoreルールは、2027-01-01まで誰でも全データを読み書きできる初期設定のままです。上の表のサーバー専用データ（端末トークンを含む）も保護されていません。ログインした参加者だけが自分のルームを読み書きできるルールへの変更が必要です。
+- 端末での到着確認（特にiPhoneのホーム画面版）は別途必要です。FCMの実送信成功はローカルテストだけでは確認できません。「テスト通知を送る」で端末ごとに確かめてください。
 - 通知予約はデプロイ後に送った一首から作られます。過去の一首をまとめて通知する移行は行いません。既存端末は新しいWeb版で「通知を受け取る」を押し直してください。
 - Firestoreイベントは重複や順序入れ替わりがあり得ます。送信済みトークン記録と期限付きの実行ロック、OS通知のタグで再送を抑えています。FCM送信後・記録保存前にサーバーが停止した場合など、厳密な「必ず1回」の保証はありません。
 - 失効トークンを削除し、一時的な失敗は再試行します。90日間更新されていない端末情報も送信対象から外します。再ログインした端末では登録を更新します。

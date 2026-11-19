@@ -67,6 +67,8 @@ test("foreground messages reject the wrong recipient and duplicates, suppress ac
   assert.deepEqual(app.events.filter((event) => event[0] === "close"), [["close", "two"], ["close", "two"]]);
   app.emit({ recipientId: "me", type: "reminder", roomId: "r", notificationId: "three" });
   assert.match(app.toasts[1], /12時間/);
+  app.emit({ recipientId: "me", type: "test", notificationId: "four" });
+  assert.match(app.toasts[2], /テスト通知が届きました/);
 });
 
 test("registration failure keeps a safe error code and does not report an enabled device", async () => {
@@ -89,4 +91,27 @@ test("the first registration waits for the worker to activate before asking for 
   activate();
   await pending;
   assert.equal(app.events.some((event) => event[0] === "token"), true);
+});
+
+test("the test button sends this device's token, needs an enabled device, and explains each outcome", async () => {
+  const app = harness();
+  await app.run("sendTestNotification()");
+  assert.match(app.toasts.at(-1), /通知を受け取る/);
+  await app.run("enableNotifications()");
+  let answer = { status: "sent" };
+  app.run("backend.notificationCallables").test = async (data) => { app.events.push(["test", data.token]); if (answer instanceof Error) throw answer; return { data: answer }; };
+  await app.run("sendTestNotification()");
+  assert.deepEqual(app.events.at(-1), ["test", "test-device-token"]);
+  assert.match(app.run("backend.notificationStatus"), /テスト通知を送りました/);
+  answer = { status: "cooldown", retryAfterSeconds: 12 };
+  await app.run("sendTestNotification()");
+  assert.match(app.run("backend.notificationStatus"), /あと12秒/);
+  answer = { status: "expired" };
+  await app.run("sendTestNotification()");
+  assert.match(app.run("backend.notificationStatus"), /登録し直して/);
+  answer = Object.assign(new Error("offline"), { code: "functions/unavailable" });
+  await app.run("sendTestNotification()");
+  assert.match(app.run("backend.notificationStatus"), /functions\/unavailable/);
+  assert.equal(app.run("backend.notificationTesting"), false);
+  assert.match(app.run("renderProfileCard()"), /data-action="test-notification"/);
 });

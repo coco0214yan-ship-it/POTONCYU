@@ -497,6 +497,7 @@ const backend = {
   notificationToken: "",
   notificationEnabled: false,
   notificationBusy: false,
+  notificationTesting: false,
   notificationCallables: null,
   notificationUnsubscribe: null,
   notificationGeneration: 0,
@@ -1224,7 +1225,8 @@ function renderProfileCard() {
           <h3>スマホ通知</h3>
           <p class="small-note">${escapeHtml(backend.notificationStatus)}</p>
         </div>
-        <button type="button" class="copy-button" data-action="${backend.notificationEnabled ? "disable-notifications" : "enable-notifications"}" ${backend.notificationBusy ? "disabled" : ""}>${backend.notificationBusy ? "設定中…" : backend.notificationEnabled ? "この端末の通知を停止" : "通知を受け取る"}</button>
+        <button type="button" class="copy-button" data-action="${backend.notificationEnabled ? "disable-notifications" : "enable-notifications"}" ${backend.notificationBusy || backend.notificationTesting ? "disabled" : ""}>${backend.notificationBusy ? "設定中…" : backend.notificationEnabled ? "この端末の通知を停止" : "通知を受け取る"}</button>
+        ${backend.notificationEnabled ? `<button type="button" class="copy-button" data-action="test-notification" ${backend.notificationBusy || backend.notificationTesting ? "disabled" : ""}>${backend.notificationTesting ? "送信中…" : "テスト通知を送る"}</button>` : ""}
         <p class="small-note">新しい一首・メッセージと、自分が一首を送って12時間後にお知らせします。通知には会話の本文を表示しません。</p>
         <p class="small-note">iPhone・iPadではSafariからホーム画面に追加し、追加したアプリで通知を許可してください。</p>
       </div>
@@ -2085,6 +2087,11 @@ async function handleClick(event) {
     await enableNotifications();
     return;
   }
+  if (action === "test-notification") {
+    await sendTestNotification();
+    return;
+  }
+
   if (action === "disable-notifications") {
     await disableNotifications();
     return;
@@ -2926,6 +2933,7 @@ async function getNotificationCallables() {
     backend.notificationCallables = {
       register: module.httpsCallable(functions, "registerNotificationDevice"),
       unregister: module.httpsCallable(functions, "unregisterNotificationDevice"),
+      test: module.httpsCallable(functions, "sendTestNotification", { timeout: 30000 }),
     };
   }
   return backend.notificationCallables;
@@ -2934,6 +2942,34 @@ async function getNotificationCallables() {
 async function saveNotificationToken(token, userId = appState.user?.id) {
   if (!userId || appState.user?.id !== userId) return;
   await (await getNotificationCallables()).register({ token });
+}
+
+// この端末だけにテスト通知を送る。サーバーは5秒待ってから送るので、閉じた状態も確かめられる。
+async function sendTestNotification() {
+  if (backend.notificationBusy || backend.notificationTesting) return;
+  const token = backend.notificationToken;
+  if (!isFirebaseMode() || !backend.notificationEnabled || !token) {
+    showToast("先に「通知を受け取る」を押してください。");
+    return;
+  }
+  backend.notificationTesting = true;
+  backend.notificationStatus = "5秒後にテスト通知を送ります。アプリを閉じた状態で確かめる時は、今のうちに閉じてください。";
+  render();
+  try {
+    const result = (await (await getNotificationCallables()).test({ token })).data || {};
+    if (result.status === "sent") {
+      backend.notificationStatus = "テスト通知を送りました。少し待っても出ない時は、端末の設定でこのアプリ（ブラウザ）の通知が許可されているか、おやすみモードになっていないかを確認してください。";
+    } else if (result.status === "cooldown") {
+      backend.notificationStatus = `前のテストから間がありません。あと${Math.max(1, Number(result.retryAfterSeconds) || 30)}秒待ってから、もう一度押してください。`;
+    } else {
+      backend.notificationStatus = "この端末の通知登録が見つかりませんでした。「この端末の通知を停止」を押してから、もう一度「通知を受け取る」で登録し直してください。";
+    }
+  } catch (error) {
+    backend.notificationStatus = `テスト通知を送れませんでした（${notificationErrorCode(error)}）。通信を確認して、もう一度お試しください。`;
+  } finally {
+    backend.notificationTesting = false;
+    render();
+  }
 }
 
 async function updateNotificationSession(userId) {
@@ -3007,7 +3043,7 @@ function setupForegroundNotifications() {
       closeShownNotification(id);
       return;
     }
-    const text = payload.data?.type === "reminder" ? "12時間たちました。新しい一首で、また話そう。" : payload.data?.type === "text" ? "新しいメッセージが届きました。" : "新しい一首が届きました。";
+    const text = payload.data?.type === "test" ? "テスト通知が届きました。" : payload.data?.type === "reminder" ? "12時間たちました。新しい一首で、また話そう。" : payload.data?.type === "text" ? "新しいメッセージが届きました。" : "新しい一首が届きました。";
     showToast(text);
   });
 }
