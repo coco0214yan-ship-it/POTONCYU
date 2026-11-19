@@ -12,11 +12,12 @@ const POTONCHU_FIREBASE_CONFIG_VALUE = {
 
 // スマホ通知を使う場合は、Firebase Console > Cloud Messaging で作った
 // Web Push certificates の「公開鍵」をここに貼ります。
-const POTONCHU_FIREBASE_MESSAGING_VAPID_KEY_VALUE = "";
+const POTONCHU_FIREBASE_MESSAGING_VAPID_KEY_VALUE = "BINpoX_uGbCU8Qa-dMSQKgrMU1dN8afMgX7J0uyhAD23WnPZZSYEdbHW8Xa3n81CdoLm3vxtOQkMVwjGiPDxLyM";
 
 if (typeof window !== "undefined") {
   window.POTONCHU_FIREBASE_CONFIG = POTONCHU_FIREBASE_CONFIG_VALUE;
   window.POTONCHU_FIREBASE_MESSAGING_VAPID_KEY = POTONCHU_FIREBASE_MESSAGING_VAPID_KEY_VALUE;
+  window.POTONCHU_NOTIFICATION_CONFIG = { region: "asia-northeast1" };
   // Enable after deploying generatePoems and registering its server-side secret.
   window.POTONCHU_GENERATION_CONFIG = { enabled: false, region: "asia-northeast1" };
 }

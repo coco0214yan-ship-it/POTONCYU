@@ -29,7 +29,7 @@ node server.cjs
 - リアクションは選択直後に表示。Firestoreでは選んだ種類だけを更新し、他の人の反応を保ちます。保存失敗時は自分の変更を戻し、画面に表示します。
 - リアクションの音は端末内で合成します。チャット上部の「音」で切り替え、端末ごとに設定を保存します。
 
-24時間ごとの定期通知は未接続です。既存のFirebase設定と通知受信処理は維持しています。Firebase FunctionsやFirestoreルールのデプロイは、GitHub Pagesの更新とは別です。
+FCM通知は、新しい一首・文章・返信を受け取った時と、自分の一首から12時間後に送信します。プロフィールで端末ごとに開始・停止できます。本番利用にはFunctionsのデプロイとFirebase設定の確認が必要です。[プッシュ通知の設定・デプロイ・検証手順](docs/push-notifications.md)を参照してください。
 
 ## AI生成の有効化
 
@@ -50,7 +50,7 @@ node server.cjs
 ## 確認
 
 ```powershell
-node --test tests/production-chat.test.cjs tests/chat-flow.test.cjs tests/chat-rules.test.cjs tests/poem-engine.test.cjs tests/reactions.test.cjs tests/ai-generation.test.cjs
+node --test tests/notifications.test.cjs tests/notification-client.test.cjs tests/notification-worker.test.cjs tests/production-chat.test.cjs tests/chat-flow.test.cjs tests/chat-rules.test.cjs tests/poem-engine.test.cjs tests/reactions.test.cjs tests/ai-generation.test.cjs
 ```
 
 `tests/ui-smoke.cjs` はPlaywrightを使ったローカル画面確認です。Firebase設定を空にした検証専用のブラウザで動かし、本物のアカウントやルームには書き込みません。

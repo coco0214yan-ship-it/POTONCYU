@@ -10,7 +10,8 @@ const SESSION_USER_KEY = `${STORAGE_PREFIX}.sessionUser.v1`;
 const ACTIVE_ROOM_KEY = `${STORAGE_PREFIX}.activeRoomId`;
 const HISTORY_RESET_KEY = `${STORAGE_PREFIX}.historyReset.v5`;
 const FIREBASE_SDK_VERSION = "12.15.0";
-const FIREBASE_MESSAGING_SW_PATH = "./firebase-messaging-sw.js";
+const FIREBASE_MESSAGING_SW_PATH = "./firebase-messaging-sw.js?v=20261117-fcm1";
+const NOTIFICATION_STORAGE_KEY = `${STORAGE_PREFIX}.notificationDevice.v1`;
 const BLANK = "__POTON_BLANK__";
 
 const topicGroups = [
@@ -494,6 +495,12 @@ const backend = {
   seenMemberIds: new Map(),
   notificationStatus: "通知はまだ設定されていません。",
   notificationToken: "",
+  notificationEnabled: false,
+  notificationBusy: false,
+  notificationCallables: null,
+  notificationUnsubscribe: null,
+  notificationGeneration: 0,
+  notificationRefreshedAt: 0,
   serviceWorkerRegistration: null,
 };
 if (hasFirebaseConfig()) backend.status = "Firebaseへ接続中です。";
@@ -721,6 +728,8 @@ async function initBackend() {
 
     authModule.onAuthStateChanged(auth, async (firebaseUser) => {
       if (!firebaseUser) {
+        backend.notificationEnabled = false;
+        void updateNotificationSession("").catch(() => {});
         clearSessionUser();
         sharedState = createSharedState();
         cleanupFirebaseSubscriptions();
@@ -740,6 +749,7 @@ async function initBackend() {
       }
       subscribeFirebaseRooms(user.id);
       await routeAfterAuth();
+      await restoreNotifications();
     });
 
     render();
@@ -754,14 +764,15 @@ async function initBackend() {
 async function loadFirebaseMessagingModule() {
   if (!canUseBrowserNotifications()) return null;
   try {
-    return await import(`https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}/firebase-messaging.js`);
+    const module = await import(`https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}/firebase-messaging.js`);
+    return await module.isSupported() ? module : null;
   } catch (error) {
     return null;
   }
 }
 
 function canUseBrowserNotifications() {
-  return "Notification" in window && "serviceWorker" in navigator;
+  return window.isSecureContext !== false && "Notification" in window && "serviceWorker" in navigator;
 }
 
 async function signInWithFirebase() {
@@ -801,6 +812,7 @@ function googleLoginErrorMessage(code) {
 
 async function signOutCurrentUser() {
   if (isFirebaseMode()) {
+    await disableNotifications(true);
     await backend.firebase.authModule.signOut(backend.firebase.auth);
   }
   clearSessionUser();
@@ -1212,8 +1224,9 @@ function renderProfileCard() {
           <h3>スマホ通知</h3>
           <p class="small-note">${escapeHtml(backend.notificationStatus)}</p>
         </div>
-        <button type="button" class="copy-button" data-action="enable-notifications">通知を受け取る</button>
-        <p class="small-note">24時間ごとの定期通知は、まだ利用できません。</p>
+        <button type="button" class="copy-button" data-action="${backend.notificationEnabled ? "disable-notifications" : "enable-notifications"}" ${backend.notificationBusy ? "disabled" : ""}>${backend.notificationBusy ? "設定中…" : backend.notificationEnabled ? "この端末の通知を停止" : "通知を受け取る"}</button>
+        <p class="small-note">新しい一首・メッセージと、自分が一首を送って12時間後にお知らせします。通知には会話の本文を表示しません。</p>
+        <p class="small-note">iPhone・iPadではSafariからホーム画面に追加し、追加したアプリで通知を許可してください。</p>
       </div>
     </div>
   `;
@@ -2072,6 +2085,10 @@ async function handleClick(event) {
     await enableNotifications();
     return;
   }
+  if (action === "disable-notifications") {
+    await disableNotifications();
+    return;
+  }
 
   if (action === "reply-yesterday") {
     ui.topic = "昨日の続き";
@@ -2806,7 +2823,8 @@ async function saveProfilePhoto() {
   showToast("写真をアイコンにしました。");
 }
 
-async function enableNotifications() {
+async function enableNotifications(restore = false) {
+  if (backend.notificationBusy) return;
   if (!appState.user) {
     showToast("先にログインしてください。");
     return;
@@ -2829,15 +2847,17 @@ async function enableNotifications() {
     return;
   }
 
-  const permission = await Notification.requestPermission();
-  if (permission !== "granted") {
-    backend.notificationStatus = "通知が許可されていません。スマホ側の通知設定を確認してください。";
-    render();
-    return;
-  }
-
+  const userId = appState.user.id;
+  const generation = backend.notificationGeneration;
+  backend.notificationBusy = true;
   try {
-    const registration = await navigator.serviceWorker.register(FIREBASE_MESSAGING_SW_PATH, { scope: "./" });
+    // Permission prompts must follow an explicit user click, never page load.
+    const permission = restore ? Notification.permission : await Notification.requestPermission();
+    if (permission !== "granted") {
+      backend.notificationStatus = permission === "denied" ? "通知がブロックされています。ブラウザのサイト設定から許可してください。" : "通知はまだ許可されていません。";
+      return;
+    }
+    const registration = await navigator.serviceWorker.register(FIREBASE_MESSAGING_SW_PATH, { scope: "./", updateViaCache: "none" });
     backend.serviceWorkerRegistration = registration;
     const token = await backend.firebase.messagingModule.getToken(backend.firebase.messaging, {
       vapidKey,
@@ -2845,58 +2865,135 @@ async function enableNotifications() {
     });
     if (!token) {
       backend.notificationStatus = "通知の登録がまだ完了していません。少し後でもう一度試してください。";
-      render();
       return;
     }
-
-    await saveNotificationToken(token);
+    if (appState.user?.id !== userId || generation !== backend.notificationGeneration) return;
+    await saveNotificationToken(token, userId);
+    if (appState.user?.id !== userId || generation !== backend.notificationGeneration) {
+      await (await getNotificationCallables()).unregister({ token });
+      return;
+    }
+    const previous = readNotificationDevice();
+    if (previous?.userId === userId && previous.token && previous.token !== token) {
+      await (await getNotificationCallables()).unregister({ token: previous.token });
+    }
+    await updateNotificationSession(userId);
+    localStorage.setItem(NOTIFICATION_STORAGE_KEY, JSON.stringify({ userId, token }));
     backend.notificationToken = token;
+    backend.notificationEnabled = true;
+    backend.notificationRefreshedAt = Date.now();
     backend.notificationStatus = "この端末で通知を受け取れます。";
-    render();
-    showToast("通知を受け取れるようにしました。");
+    if (!restore) showToast("通知を受け取れるようにしました。");
   } catch (error) {
-    backend.notificationStatus = "通知の登録に失敗しました。Firebase設定を確認してください。";
+    const code = notificationErrorCode(error);
+    backend.notificationStatus = `通知を登録できませんでした（${code}）。通信と通知設定を確認し、もう一度お試しください。`;
+    if (!restore) showToast("通知の登録に失敗しました。");
+  } finally {
+    backend.notificationBusy = false;
     render();
-    showToast("通知の登録に失敗しました。");
   }
 }
 
-async function saveNotificationToken(token) {
-  const { firestoreModule, db } = backend.firebase;
-  const tokenId = tokenToDocId(token);
-  await firestoreModule.setDoc(
-    firestoreModule.doc(db, "users", appState.user.id, "notificationTokens", tokenId),
-    {
-      token,
-      userId: appState.user.id,
-      userName: appState.user.name,
-      roomIds: appState.rooms.map((room) => room.id),
-      userAgent: navigator.userAgent,
-      updatedAt: firestoreModule.serverTimestamp(),
-    },
-    { merge: true },
-  );
+function readNotificationDevice() {
+  try { return JSON.parse(localStorage.getItem(NOTIFICATION_STORAGE_KEY) || "null"); } catch { return null; }
+}
+
+function notificationErrorCode(error) {
+  return /^[a-z-]+\/[a-z0-9-]+$/.test(error?.code || "") ? error.code : "notification/registration-failed";
+}
+
+async function getNotificationCallables() {
+  if (!backend.notificationCallables) {
+    const module = await import(`https://www.gstatic.com/firebasejs/${FIREBASE_SDK_VERSION}/firebase-functions.js`);
+    const functions = module.getFunctions(backend.firebase.app, window.POTONCHU_NOTIFICATION_CONFIG?.region || "asia-northeast1");
+    backend.notificationCallables = {
+      register: module.httpsCallable(functions, "registerNotificationDevice"),
+      unregister: module.httpsCallable(functions, "unregisterNotificationDevice"),
+    };
+  }
+  return backend.notificationCallables;
+}
+
+async function saveNotificationToken(token, userId = appState.user?.id) {
+  if (!userId || appState.user?.id !== userId) return;
+  await (await getNotificationCallables()).register({ token });
+}
+
+async function updateNotificationSession(userId) {
+  if (!navigator.serviceWorker) return;
+  const registration = backend.serviceWorkerRegistration || await navigator.serviceWorker.getRegistration?.(new URL("./", window.location.href));
+  if (!registration) return;
+  const worker = registration.installing || registration.waiting || registration.active;
+  if (!worker) return;
+  if (!window.MessageChannel) { worker.postMessage({ type: "notification-session", userId }); return; }
+  await new Promise((resolve, reject) => {
+    const channel = new window.MessageChannel();
+    const timer = window.setTimeout(() => { channel.port1.close(); reject(new Error("Notification worker did not respond")); }, 10000);
+    channel.port1.onmessage = () => { window.clearTimeout(timer); channel.port1.close(); resolve(); };
+    worker.postMessage({ type: "notification-session", userId }, [channel.port2]);
+  });
+}
+
+async function restoreNotifications() {
+  const saved = readNotificationDevice();
+  if (!saved || saved.userId !== appState.user?.id || !canUseBrowserNotifications()) return;
+  backend.notificationToken = saved.token || "";
+  if (Notification.permission === "granted") {
+    if (!backend.notificationEnabled || Date.now() - backend.notificationRefreshedAt > 6 * 60 * 60 * 1000) await enableNotifications(true);
+  }
+  else await disableNotifications(true);
+}
+
+async function disableNotifications(signingOut = false) {
+  backend.notificationGeneration++;
+  const saved = readNotificationDevice();
+  const token = backend.notificationToken || (saved?.userId === appState.user?.id ? saved.token : "");
+  backend.notificationBusy = true;
+  try {
+    // Clear the worker's owner first so queued pushes cannot appear after logout.
+    await updateNotificationSession("");
+    if (token && isFirebaseMode()) {
+      const results = await Promise.allSettled([
+        getNotificationCallables().then((callables) => callables.unregister({ token })),
+        backend.firebase.messaging ? backend.firebase.messagingModule.deleteToken(backend.firebase.messaging) : Promise.reject(new Error("Messaging unavailable")),
+      ]);
+      if (results.every((result) => result.status === "rejected")) throw results[0].reason;
+    }
+    localStorage.removeItem(NOTIFICATION_STORAGE_KEY);
+    backend.notificationToken = "";
+    backend.notificationEnabled = false;
+    backend.notificationStatus = "この端末の通知を停止しました。";
+    if (!signingOut) showToast("この端末の通知を停止しました。");
+  } catch (error) {
+    backend.notificationStatus = `通知の解除を完了できませんでした（${notificationErrorCode(error)}）。接続してもう一度お試しください。`;
+    if (!signingOut) showToast("通知の解除に失敗しました。もう一度お試しください。");
+  } finally {
+    backend.notificationBusy = false;
+    render();
+  }
 }
 
 function setupForegroundNotifications() {
   const messagingModule = backend.firebase?.messagingModule;
   const messaging = backend.firebase?.messaging;
   if (!messagingModule || !messaging) return;
-  messagingModule.onMessage(messaging, (payload) => {
+  backend.notificationUnsubscribe?.();
+  const seen = new Set();
+  backend.notificationUnsubscribe = messagingModule.onMessage(messaging, (payload) => {
+    if (!backend.notificationEnabled || payload.data?.recipientId !== appState.user?.id) return;
+    const id = payload.data?.notificationId || payload.messageId;
+    if (id && seen.has(id)) return;
+    if (id) { seen.add(id); if (seen.size > 100) seen.delete(seen.values().next().value); }
     const roomId = payload.data?.roomId || "";
-    const senderName = payload.data?.senderName || "誰か";
-    if (roomId && roomId !== appState.activeRoomId) showToast(`${senderName}さんから一首が届きました。`);
-    else showToast("新しい一首が届きました。");
+    if (payload.data?.type !== "reminder" && ui.view === "chat" && roomId === appState.activeRoomId && document.visibilityState === "visible") return;
+    const text = payload.data?.type === "reminder" ? "12時間たちました。新しい一首で、また話そう。" : payload.data?.type === "text" ? "新しいメッセージが届きました。" : "新しい一首が届きました。";
+    showToast(text);
   });
 }
 
 function getMessagingVapidKey() {
   const config = getFirebaseConfig();
   return window.POTONCHU_FIREBASE_MESSAGING_VAPID_KEY || config.messagingVapidKey || "";
-}
-
-function tokenToDocId(token) {
-  return token.replaceAll("/", "_").replaceAll("+", "-").replaceAll("=", "");
 }
 
 async function updateSenderPhotoInJoinedRooms(user) {
@@ -3238,7 +3335,12 @@ function refreshPreviewClock() {
   if (wasReminderVisible !== ui.reminderVisible || (talkButton && talkButton.disabled === canTalk)) render();
 }
 window.setInterval(refreshPreviewClock, 30000);
-document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshPreviewClock(); });
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    refreshPreviewClock();
+    if (isFirebaseMode() && !backend.notificationBusy) void restoreNotifications();
+  }
+});
 
 app.addEventListener("click", handleClick);
 app.addEventListener("submit", handleSubmit);
