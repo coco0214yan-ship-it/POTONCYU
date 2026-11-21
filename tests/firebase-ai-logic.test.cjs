@@ -128,3 +128,5 @@ test("the app asks Firebase AI Logic with the public config only, and falls back
   assert.equal(off.run("aiLogicEnabled()"), false);
   assert.equal((await off.run('generatePoem("ありがとう", "", "room")')).source, "sample");
 });
+
+test("AI titles are validated",()=>{assert.equal(ai.validateDraft({...sample(),title:"おなかすいた"}).title,"おなかすいた");assert.throws(()=>ai.validateDraft({...sample(),title:"あ".repeat(21)}));assert.throws(()=>ai.validateDraft({...sample(),title:"タイトル\n改行"}));});

@@ -76,3 +76,6 @@ node --test tests/notifications.test.cjs tests/notification-client.test.cjs test
 ```
 
 `tests/ui-smoke.cjs` はPlaywrightを使ったローカル画面確認です。Firebase設定を空にした検証専用のブラウザで動かし、本物のアカウントやルームには書き込みません。
+
+## 2026-11-19：1対1・タイトル・友達のプロフィール
+一首は送信前にタイトルを編集でき、吹き出しとお気に入りに表示します。友達のアイコンから共有済みの名前・写真を確認できます。トーク一覧と新規作成は1対1のみです。既存のグループ履歴は削除しません。AI・通知・招待QRの既存設定は維持します。

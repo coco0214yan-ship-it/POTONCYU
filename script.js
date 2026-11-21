@@ -611,6 +611,7 @@ function normalizeMessage(message) {
     roomId: message.roomId || "",
     kind: message.kind === "text" ? "text" : "poem",
     text: typeof message.text === "string" ? message.text : "",
+    title: normalizePoemTitle(message.title),
     topic: message.topic || "お題",
     lines: Array.isArray(message.lines) ? message.lines : Array.isArray(message.poemLines) ? message.poemLines : [],
     selectedWord: message.selectedWord || "",
@@ -951,6 +952,7 @@ function normalizeFirebaseMessage(roomId, messageDoc) {
     roomId,
     kind: data.kind,
     text: data.text,
+    title: data.title,
     topic: data.topic,
     lines: data.poemLines,
     poemLines: data.poemLines,
@@ -1006,6 +1008,7 @@ function render() {
   if (ui.view === "home") app.innerHTML = renderHome();
   if (ui.view === "create-room") app.innerHTML = renderCreateRoom();
   if (ui.view === "chat") app.innerHTML = renderChat();
+  if (ui.view === "member-profile") app.innerHTML = renderMemberProfile();
   if (ui.view === "talk") app.innerHTML = renderTalk();
   if (ui.view === "topic") app.innerHTML = renderTopic();
   if (ui.view === "gacha") app.innerHTML = renderGacha();
@@ -1144,7 +1147,7 @@ function renderHome() {
             <div>
               <p class="eyebrow">talks</p>
               <h2>トーク</h2>
-              <p class="small-note">一首を送りたい相手・グループを選んでね。</p>
+              <p class="small-note">一首を送りたい相手を選んでね。</p>
             </div>
           </div>
           ${renderRoomList()}
@@ -1234,37 +1237,38 @@ function renderProfileCard() {
   `;
 }
 
+function isPairRoom(room) { return Boolean(room && room.type === "pair" && room.members.length <= 2); }
+function canJoinPairRoom(room) { return isPairRoom(room) && (room.members.some((m) => m.id === appState.user?.id) || room.members.length < 2); }
+function pairPeer(room) { return room?.members.find((m) => m.id !== appState.user?.id) || null; }
+function profileAvatar(user, roomId, className = "avatar small") {
+  if (!user || user.id === appState.user?.id) return user ? renderAvatar(user, className) : "";
+  return '<button type="button" class="profile-avatar-button" data-action="open-member-profile" data-room-id="' + escapeAttribute(roomId) + '" data-user-id="' + escapeAttribute(user.id) + '" aria-label="' + escapeAttribute(user.name) + 'さんのプロフィールを見る">' + renderAvatar(user, className) + '</button>';
+}
 function renderRoomList() {
-  if (appState.rooms.length === 0) {
-    return `
-      <div class="empty-state">
-        <p>まだトークがありません。</p>
-        <button type="button" class="primary-button" data-action="go-create-room">相手・グループのトークを作る</button>
-      </div>
-    `;
-  }
-
-  return `
-    <div class="room-list">
-      ${appState.rooms
-        .slice()
-        .filter((room) => room.members.some((member) => member.id === appState.user.id))
-        .sort((a, b) => (b.messages.at(-1)?.createdAt || b.createdAt) - (a.messages.at(-1)?.createdAt || a.createdAt))
-        .map(
-          (room) => `
-            <button type="button" class="room-item" data-action="open-room" data-room-id="${escapeAttribute(room.id)}">
-              ${renderAvatar({ icon: room.type === "group" ? "輪" : room.name.slice(0, 1) }, "avatar room-avatar")}
-              <span class="room-summary">
-                <strong>${escapeHtml(room.name)}</strong>
-                <span class="room-meta">${escapeHtml(room.messages.at(-1)?.kind === "text" ? room.messages.at(-1).text : room.messages.length ? "一首がぽとんと届きました" : "最初の一首を送ってみよう")}</span>
-              </span>
-              <span class="room-kind">${room.type === "group" ? "グループ" : "1対1"}</span>
-            </button>
-          `,
-        )
-        .join("")}
-    </div>
-  `;
+  const rooms = appState.rooms.filter((room) => isPairRoom(room) && room.members.some((m) => m.id === appState.user.id))
+    .slice().sort((a,b) => (b.messages.at(-1)?.createdAt || b.createdAt) - (a.messages.at(-1)?.createdAt || a.createdAt));
+  if (!rooms.length) return '<div class="empty-state"><p>まだ1対1のトークがありません。</p><button type="button" class="primary-button" data-action="go-create-room">1対1のトークを作る</button></div>';
+  return '<div class="room-list">' + rooms.map((room) => {
+    const peer = pairPeer(room), last = room.messages.at(-1);
+    return '<div class="room-list-row">' + (peer ? profileAvatar(peer, room.id, "avatar room-avatar") : renderAvatar({icon:"ぽ"}, "avatar room-avatar")) +
+      '<button type="button" class="room-item" data-action="open-room" data-room-id="' + escapeAttribute(room.id) + '"><span class="room-summary"><strong>' + escapeHtml(room.name) +
+      '</strong><span class="room-meta">' + escapeHtml(last?.kind === "text" ? last.text : last ? poemTitle(last) : "最初の一首を送ってみよう") +
+      '</span></span><span class="room-kind">1対1</span></button></div>';
+  }).join("") + "</div>";
+}
+function normalizePoemTitle(value) { return Array.from(String(value || "").trim().replace(/\s+/g," ")).slice(0,20).join(""); }
+function suggestedPoemTitle(draft) { return normalizePoemTitle(draft?.title || draft?.lines?.find((line) => line !== BLANK)) || "今日の気持ち"; }
+function poemTitle(message) {
+  return normalizePoemTitle(message?.title || (!["一首","お題"].includes(message?.topic) ? message?.topic : "")) || "無題の一首";
+}
+function renderMemberProfile() {
+  const room = findRoom(ui.profileRoomId);
+  const member = isPairRoom(room) && room.members.some((m) => m.id === appState.user?.id) ? room.members.find((m) => m.id === ui.profileUserId) : null;
+  const content = member ? '<div class="member-profile-card">' + renderAvatar(member,"avatar profile-avatar") +
+    '<h2>' + escapeHtml(member.name) + '</h2><p class="small-note">このトークで共有されているプロフィールです。</p></div>' :
+    '<p>このトークのプロフィールを表示できません。</p>';
+  return '<section class="screen member-profile-screen">' + renderTopbar('<button type="button" class="back-button" data-action="close-member-profile">戻る</button>') +
+    '<section class="panel"><p class="eyebrow">profile</p><h1>友達のプロフィール</h1>' + content + '</section></section>';
 }
 
 function renderFavorite() {
@@ -1279,7 +1283,7 @@ function renderFavorite() {
 
   return `<div class="favorites-list">${favorites.map((favorite) => `
     <article class="favorite-box">
-      <div class="favorite-meta">${escapeHtml(favorite.roomName)} ・ ${escapeHtml(favorite.topic)}</div>
+      <div class="favorite-meta">${escapeHtml(favorite.roomName)} ・ ${escapeHtml(poemTitle(favorite))}</div>
       ${renderPoemLines(favorite.lines)}
       <div class="favorite-meta">${formatDate(favorite.savedAt)}に保存</div>
       <button type="button" class="mini-button" data-action="remove-favorite" data-room-id="${escapeAttribute(favorite.roomId)}" data-message-id="${escapeAttribute(favorite.messageId)}">お気に入りから外す</button>
@@ -1293,38 +1297,11 @@ function getFavorites() {
 
 function renderCreateRoom() {
   const createdRoom = ui.createResultId ? findRoom(ui.createResultId) : null;
-  return `
-    <section class="screen room-create-screen">
-      ${renderTopbar(`<button type="button" class="back-button" data-action="go-home">トーク一覧へ</button>`)}
-      <div class="panel">
-        <div class="page-title">
-          <p class="eyebrow">new room</p>
-          <h1>ルーム作成</h1>
-        </div>
-        <form class="room-form" data-form="room">
-          <label class="field-label">
-            ルーム名
-            <input name="roomName" maxlength="24" placeholder="例：帰り道の会" autocomplete="off" />
-          </label>
-          <div class="field-label">
-            使い方
-            <div class="room-type-grid">
-              <label class="room-type">
-                <input type="radio" name="roomType" value="pair" checked />
-                <span>1対1</span>
-              </label>
-              <label class="room-type">
-                <input type="radio" name="roomType" value="group" />
-                <span>グループ</span>
-              </label>
-            </div>
-          </div>
-          <button type="submit" class="primary-button">ルームを作る</button>
-        </form>
-        ${createdRoom ? renderCreatedRoom(createdRoom) : ""}
-      </div>
-    </section>
-  `;
+  return '<section class="screen room-create-screen">' + renderTopbar('<button type="button" class="back-button" data-action="go-home">トーク一覧へ</button>') +
+    '<div class="panel"><div class="page-title"><p class="eyebrow">new talk</p><h1>1対1のトークを作る</h1></div>' +
+    '<form class="room-form" data-form="room"><label class="field-label">トークの名前<input name="roomName" maxlength="24" placeholder="例：ともだちとのトーク" autocomplete="off" /></label>' +
+    '<p class="small-note">招待できる相手は1人です。</p><button type="submit" class="primary-button">トークを作る</button></form>' +
+    (createdRoom ? renderCreatedRoom(createdRoom) : "") + '</div></section>';
 }
 
 function renderCreatedRoom(room) {
@@ -1344,7 +1321,7 @@ function renderCreatedRoom(room) {
 
 function renderChat() {
   const room = currentRoom();
-  if (!room) {
+  if (!isPairRoom(room)) {
     ui.view = "home";
     return renderHome();
   }
@@ -1358,10 +1335,10 @@ function renderChat() {
     <section class="screen chat-shell">
       <header class="chat-header">
         <button type="button" class="back-button" data-action="go-home">戻る</button>
-        <div>
-          <p class="eyebrow">${room.type === "group" ? "group room" : "pair room"}</p>
+        <div class="peer-heading">${pairPeer(room) ? profileAvatar(pairPeer(room), room.id, "avatar small") : ""}<div>
+          <p class="eyebrow">${"pair room"}</p>
           <h1>${escapeHtml(room.name)}</h1>
-        </div>
+        </div></div>
         <div class="chat-tools">
           <button type="button" class="copy-button" data-action="copy-invite" data-room-id="${escapeAttribute(room.id)}">招待</button>
           <label class="reaction-sound-toggle" title="リアクションの音を切り替える">
@@ -1418,7 +1395,7 @@ function renderTalk() {
         <div class="participant-stack" aria-label="参加者">${room.members.map((member) => renderAvatar(member, "avatar small", member.name)).join("")}</div>
       </header>
       <section class="talk-original" aria-label="きっかけの一首">
-        <div class="message-meta">${renderAvatar(message.author, "avatar small")}<span>${escapeHtml(message.author.name)} ・ ${formatDate(message.createdAt)}</span></div>
+        <div class="message-meta">${profileAvatar(message.author, room.id, "avatar small")}<span>${escapeHtml(message.author.name)} ・ ${formatDate(message.createdAt)}</span></div>
         <span class="message-topic">${escapeHtml(message.topic)}</span>
         ${renderPoemLines(message.lines)}
       </section>
@@ -1585,7 +1562,7 @@ function renderMessage(message, room) {
   const isMine = message.author.id === appState.user.id;
   if (message.kind === "text") return `
     <article class="message-row text-message ${isMine ? "is-mine" : ""}">
-      <div class="message-meta">${isMine ? "" : renderAvatar(message.author, "avatar small")}<span>${escapeHtml(message.author.name)} ・ ${formatDate(message.createdAt)}</span></div>
+      <div class="message-meta">${isMine ? "" : profileAvatar(message.author, room.id, "avatar small")}<span>${escapeHtml(message.author.name)} ・ ${formatDate(message.createdAt)}</span></div>
       <div class="text-bubble">${escapeHtml(message.text)}</div>
     </article>`;
   const statusText = message.status === "sending" ? " ・ 送信中" : message.status === "failed" ? " ・ 送れませんでした" : "";
@@ -1595,12 +1572,12 @@ function renderMessage(message, room) {
   return `
     <article class="message-row ${isMine ? "is-mine" : ""}">
       <div class="message-meta ${isMine ? "is-mine" : ""}">
-        ${isMine ? "" : renderAvatar(message.author, "avatar small", message.author.name)}
+        ${isMine ? "" : profileAvatar(message.author, room.id, "avatar small")}
         <span>${escapeHtml(message.author.name)} ・ ${formatDate(message.createdAt)}${statusText}</span>
       </div>
       <div class="poem-bubble">
         <div class="poem-open-talk">
-        <span class="message-topic">ぽとんと一首</span>
+        <span class="message-topic">${escapeHtml(poemTitle(message))}</span>
         <span class="poem-lines">${message.lines.map((line) => `<span class="poem-line">${escapeHtml(line)}</span>`).join("")}</span>
         </div>
         <div class="reaction-row" aria-label="ついているリアクション">${renderReactionSummary(message, room)}</div>
@@ -1818,8 +1795,10 @@ function renderConfirm() {
         <div>
           <p class="eyebrow">send</p>
           <h1>この一首で送る？</h1>
+          <label class="field-label poem-title-field" for="poemTitleInput">一首のタイトル（20字まで）<input id="poemTitleInput" maxlength="20" value="${escapeAttribute(composer.title || "")}" placeholder="例：おなかすいた" /></label>
+          <p class="small-note">タイトルも相手に届きます。送る前に変更できます。</p>
           <p class="confirm-copy">${escapeHtml(currentRoom()?.name || "")}へ、この一首だけ届けます。</p>
-          <p class="small-note">5・7・5・7・7に、あなたの選ぶことばをひとつ。</p>
+          <p class="small-note">${composer.draft.source === "firebase-ai-logic" ? "AI生成した一首です。選んだことばと一緒に届けます。" : "5・7・5・7・7のサンプルです。AI生成はまだ接続していません。"}</p>
         </div>
         <div class="poem-stage">
           <div class="poem-paper">
@@ -1967,6 +1946,19 @@ async function handleClick(event) {
     return;
   }
 
+  if (action === "open-member-profile") {
+    const room = findRoom(button.dataset.roomId);
+    if (!isPairRoom(room) || !room.members.some((m) => m.id === appState.user?.id) || !room.members.some((m) => m.id === button.dataset.userId)) {
+      showToast("このトークのプロフィールを表示できません。"); return;
+    }
+    ui.profileReturnView = ui.view; ui.profileRoomId = room.id; ui.profileUserId = button.dataset.userId;
+    ui.view = "member-profile"; render(); return;
+  }
+  if (action === "close-member-profile") {
+    ui.view = ui.profileReturnView === "home" ? "home" : "chat"; render(); return;
+  }
+
+
   if (action === "google-login") {
     if (isFirebaseMode()) {
       await signInWithFirebase();
@@ -2004,7 +1996,7 @@ async function handleClick(event) {
   }
 
   if (action === "open-room") {
-    await setActiveRoom(button.dataset.roomId);
+    if (!await setActiveRoom(button.dataset.roomId)) return;
     ui.view = "chat";
     ui.composeMode = "poem";
     ui.composer = null;
@@ -2181,7 +2173,7 @@ async function handleSubmit(event) {
 
   if (form.dataset.form === "room") {
     const name = form.roomName.value.trim();
-    const type = selectedRadio(form, "roomType") || "pair";
+    const type = "pair";
     if (!name) {
       showToast("ルーム名を入れてください。");
       return;
@@ -2212,6 +2204,7 @@ async function handleSubmit(event) {
 }
 
 function handleInput(event) {
+  if (event.target.id === "poemTitleInput") { if (ui.composer) ui.composer.title = event.target.value; return; }
   if (event.target.id === "chatInput") {
     ui.chatDrafts.set(`${appState.activeRoomId}:${ui.composeMode}`, event.target.value);
     const counter = document.querySelector("#chatCount");
@@ -2246,6 +2239,7 @@ function handleInput(event) {
 async function routeAfterAuth() {
   if (ui.pendingInviteRoomId) {
     const room = await ensureJoinedRoom(ui.pendingInviteRoomId);
+    if (!room) { ui.pendingInviteRoomId = null; ui.view = "home"; ui.mainTab = "talks"; render(); return; }
     await setActiveRoom(room.id);
     ui.view = "chat";
     render();
@@ -2257,7 +2251,8 @@ async function routeAfterAuth() {
   render();
 }
 
-async function createRoom(name, type) {
+async function createRoom(name, type = "pair") {
+  type = "pair";
   const id = makeId("room");
   const room = {
     id,
@@ -2299,6 +2294,7 @@ function createMembersForRoom(type) {
 
 async function ensureJoinedRoom(roomId) {
   let room = findRoom(roomId);
+  if (ui.pendingInviteType === "group" || (room && !canJoinPairRoom(room))) { showToast("このトークは1対1専用です。参加できる相手は1人までです。"); return null; }
   if (isFirebaseMode()) {
     const { firestoreModule, db } = backend.firebase;
     const roomRef = firestoreModule.doc(db, "rooms", roomId);
@@ -2308,7 +2304,7 @@ async function ensureJoinedRoom(roomId) {
       room = {
         id: roomId,
         name: ui.pendingInviteName || `招待ルーム ${roomId.slice(-4).toUpperCase()}`,
-        type: ui.pendingInviteType === "pair" ? "pair" : "group",
+        type: "pair",
         createdBy: appState.user.id,
         inviteCode: roomId,
         members: [member],
@@ -2329,6 +2325,7 @@ async function ensureJoinedRoom(roomId) {
       return room;
     }
     room = normalizeFirebaseRoom(snapshot);
+    if (!canJoinPairRoom(room)) { showToast("このトークには参加できません。1対1専用です。"); return null; }
     const hasUser = room.members.some((item) => item.id === member.id);
     if (!hasUser) {
       await firestoreModule.updateDoc(roomRef, {
@@ -2346,7 +2343,7 @@ async function ensureJoinedRoom(roomId) {
     room = {
       id: roomId,
       name: ui.pendingInviteName || `招待ルーム ${roomId.slice(-4).toUpperCase()}`,
-      type: ui.pendingInviteType === "pair" ? "pair" : "group",
+      type: "pair",
       createdBy: "",
       inviteCode: roomId,
       members: [],
@@ -2442,9 +2439,10 @@ function upsertLocalMessage(roomId, message) {
 }
 
 async function setActiveRoom(roomId) {
+  if (appState.user && !await ensureJoinedRoom(roomId)) return false;
   appState.activeRoomId = roomId;
   sessionStorage.setItem(ACTIVE_ROOM_KEY, roomId);
-  if (appState.user) await ensureJoinedRoom(roomId);
+  return true;
 }
 
 async function spinGacha(topic, previousTemplateId = "") {
@@ -2473,6 +2471,7 @@ async function spinGacha(topic, previousTemplateId = "") {
     ]);
     if (ui.composer !== composer || ui.view !== "gacha") return;
     composer.draft = draft;
+    composer.title = draft.source === "firebase-ai-logic" && draft.title ? normalizePoemTitle(draft.title) : normalizePoemTitle(topic);
     composer.step = "gacha";
     render();
     if (composer.ai && draft.source !== "firebase-ai-logic") showToast("AIで一首を作れなかったため、用意してある一首を表示しています。");
@@ -2507,15 +2506,18 @@ function chooseWord(choice) {
 async function sendPoem() {
   const room = currentRoom();
   const composer = ui.composer;
-  if (!room || !composer?.draft || composer.step !== "confirm" || !composer.draft.choices.includes(composer.selectedChoice)) return;
+  if (!isPairRoom(room) || !composer?.draft || composer.step !== "confirm" || !composer.draft.choices.includes(composer.selectedChoice)) return;
   if (composer.roomId !== room.id) { showToast("送信先が変わりました。作り直してください。"); return; }
   if (isFirebaseMode() && navigator.onLine === false) { showToast("つながってから、もう一度送ってください。"); return; }
 
+  const title = normalizePoemTitle(composer.title);
+  if (!title) { showToast("タイトルを1〜20字で入力してください。"); return; }
   const lines = completePoemLines(composer.draft, composer.selectedChoice);
   const clientId = makeId("client");
   const message = {
     id: makeId("pending"),
     roomId: room.id,
+    title,
     topic: "一首",
     lines,
     poemLines: lines,
@@ -2545,6 +2547,7 @@ async function sendPoem() {
         senderId: appState.user.id,
         senderName: appState.user.name,
         senderPhoto: getAvatarImage(appState.user) || appState.user.icon,
+        title,
         topic: "一首",
         poemLines: lines,
         selectedWord: composer.selectedChoice,
@@ -2683,7 +2686,7 @@ async function saveFavorite(messageId) {
 
   if (!PREVIEW_MODE) {
     if (message.kind === "text" || message.status) return;
-    const favorite = { messageId: message.id, roomId: room.id, roomName: room.name, topic: message.topic, lines: [...message.lines], authorName: message.author.name, savedAt: Date.now() };
+    const favorite = { messageId: message.id, roomId: room.id, roomName: room.name, title: poemTitle(message), topic: message.topic, lines: [...message.lines], authorName: message.author.name, savedAt: Date.now() };
     try {
       await updateFavorites((items) => items.some((item) => item.roomId === room.id && item.messageId === message.id) ? items : [favorite, ...items]);
       render();
@@ -2696,7 +2699,7 @@ async function saveFavorite(messageId) {
     if (message.kind === "text") return;
     const favorites = getFavorites();
     if (favorites.some((item) => item.roomId === room.id && item.messageId === message.id)) { showToast("この一首は追加済みです。"); return; }
-    const favorite = { messageId: message.id, roomId: room.id, roomName: room.name, topic: message.topic, lines: [...message.lines], authorName: message.author.name, savedAt: Date.now() };
+    const favorite = { messageId: message.id, roomId: room.id, roomName: room.name, title: poemTitle(message), topic: message.topic, lines: [...message.lines], authorName: message.author.name, savedAt: Date.now() };
     sharedState = roomStore.update((data) => { data.favorites[appState.user.id] = [favorite, ...favorites]; return data; });
     render();
     showToast("お気に入りに追加しました。");
@@ -2707,6 +2710,7 @@ async function saveFavorite(messageId) {
     messageId: message.id,
     roomId: room.id,
     roomName: room.name,
+    title: poemTitle(message),
     topic: message.topic,
     lines: message.lines,
     authorName: message.author.name,
