@@ -1204,7 +1204,7 @@ function renderRoomList() {
     const peer = pairPeer(room), last = room.messages.at(-1);
     return '<div class="room-list-row">' + (peer ? profileAvatar(peer, room.id, "avatar room-avatar") : renderAvatar({icon:"ぽ"}, "avatar room-avatar")) +
       '<button type="button" class="room-item" data-action="open-room" data-room-id="' + escapeAttribute(room.id) + '"><span class="room-summary"><strong>' + escapeHtml(room.name) +
-      '</strong><span class="room-meta">' + escapeHtml(last?.kind === "text" ? last.text : last ? poemTitle(last) : "最初の一首を送ってみよう") +
+      '</strong><span class="room-meta">' + escapeHtml(last?.kind === "text" ? last.text : last ? "ぽとんと一首" : "最初の一首を送ってみよう") +
       '</span></span><span class="room-kind">1対1</span></button></div>';
   }).join("") + "</div>";
 }
