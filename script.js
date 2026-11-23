@@ -1577,7 +1577,7 @@ function renderMessage(message, room) {
       </div>
       <div class="poem-bubble">
         <div class="poem-open-talk">
-        <span class="message-topic">${escapeHtml(poemTitle(message))}</span>
+        <span class="message-topic">ぽとんと一首</span>
         <span class="poem-lines">${message.lines.map((line) => `<span class="poem-line">${escapeHtml(line)}</span>`).join("")}</span>
         </div>
         <div class="reaction-row" aria-label="ついているリアクション">${renderReactionSummary(message, room)}</div>

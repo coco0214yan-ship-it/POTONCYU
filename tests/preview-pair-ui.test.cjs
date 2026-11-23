@@ -18,7 +18,7 @@ test("edited titles survive sending, normalization, and favorites",async()=>{
   assert.match(app.run("renderConfirm()"),/poemTitleInput/);await app.run("sendPoem()");
   assert.equal(app.run("currentRoom().messages[0].title"),"おなかすいた");
   const html=app.run("renderMessage(currentRoom().messages[0],currentRoom())");
-  assert.match(html,/おなかすいた/);assert.doesNotMatch(html,/ぽとんと一首/);
+  assert.match(html,/<span class="message-topic">ぽとんと一首<\/span>/);assert.doesNotMatch(html,/<span class="message-topic">おなかすいた<\/span>/);
   await app.run("saveFavorite(currentRoom().messages[0].id)");assert.equal(app.run("getFavorites()[0].title"),"おなかすいた");
   assert.equal(app.run('poemTitle({topic:"一首"})'),"無題の一首");assert.equal(app.run('poemTitle({topic:"帰り道"})'),"帰り道");
 });
@@ -27,7 +27,7 @@ test("title markup is escaped and a blank title does not send",async()=>{
   app.run('ui.composer.title="";ui.composer.selectedChoice=ui.composer.draft.choices[0];ui.composer.step="confirm"');
   await app.run("sendPoem()");assert.equal(app.run("currentRoom().messages.length"),0);
   app.run('ui.composer.title="<img src=x>"');await app.run("sendPoem()");
-  const html=app.run("renderMessage(currentRoom().messages[0],currentRoom())");assert.ok(html.includes("&lt;img src=x&gt;"));assert.ok(!html.includes("<img src=x>"));
+  const html=app.run("renderMessage(currentRoom().messages[0],currentRoom())");assert.match(html,/<span class="message-topic">ぽとんと一首<\/span>/);assert.ok(!html.includes("<img src=x>"));
 });
 test("group history is retained but hidden and new rooms are always pairs",async()=>{
   const app=await harness();app.run('upsertLocalRoom({id:"old-group",name:"残すグループ履歴",type:"group",members:[appState.user],messages:[]})');
